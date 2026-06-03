@@ -21,7 +21,7 @@ input <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR/input"
 
 # 所有结果统一输出到 outp/arg_kmean
 output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR/output"
-output <- file.path(output, "arg_kmean")
+outp <- file.path(output, "arg_kmean")
 
 set.seed(123)
 
@@ -34,8 +34,8 @@ library(rstatix)
 library(RColorBrewer)
 library(mlr)
 
-if (!dir.exists(output)) {
-  dir.create(output, recursive = TRUE)
+if (!dir.exists(outp)) {
+  dir.create(outp, recursive = TRUE)
 }
 
 # -----------------------------

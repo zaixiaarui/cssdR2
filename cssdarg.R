@@ -15,8 +15,8 @@ rm(list = ls())
 # -----------------------------
 # 0. 参数与环境
 # -----------------------------
-input  <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR/input"
-output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR/output"
+input  <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input"
+output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output"
 
 set.seed(123)
 
@@ -3031,3 +3031,1480 @@ write_csv(core_summary_type,      file.path(output, "core_subtype_type_percent_l
 write_csv(core_summary_mechanism, file.path(output, "core_subtype_mechanism_percent_ld_lxc_my.csv"))
 write_csv(core_summary_rank,      file.path(output, "core_subtype_rank_percent_ld_lxc_my.csv"))
 
+——————————————————————————————————————————————————————————————————————————————————————————————————————————————————
+rm(list = ls())
+
+# -----------------------------
+# 0. 参数与环境
+# -----------------------------
+input <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input"
+output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output"
+outp <- file.path(output, "final_arg")
+
+set.seed(123)
+
+library(tidyverse)
+library(vegan)
+library(pheatmap)
+library(scales)
+library(ggpubr)
+library(rstatix)
+library(RColorBrewer)
+library(mlr)
+
+if (!dir.exists(outp)) {
+  dir.create(outp, recursive = TRUE)
+}
+
+load("input/othersam5.rda")
+
+nor_cell_sub_raw_my <- read_csv(
+  file.path(input, "sarg/normalized_cell.subtype.csv"),
+  show_col_types = FALSE
+) %>%
+  filter(!is.na(subtype))
+
+nor_cell_sub_raw_ld <- read_csv(
+  file.path(input, "sarg/ld_normalized_cell.subtype.csv"),
+  show_col_types = FALSE
+) %>%
+  filter(!is.na(subtype))
+
+nor_cell_sub_raw_198 <- read_table(
+  file.path(input, "sarg/normalized_cell.subtype_198.txt"),
+  show_col_types = FALSE
+) %>%
+  filter(!is.na(subtype))
+
+nor_cell_sub_raw_106 <- read_table(
+  file.path(input, "sarg/normalized_cell.subtype_106.txt"),
+  show_col_types = FALSE
+) %>%
+  filter(!is.na(subtype))
+
+combined_db <- read_csv(
+  file.path(input, "sarg/ARGRANKER_DB.csv"),
+  show_col_types = FALSE
+)
+
+colnames(combined_db) <- c(
+  "gene", "type", "subtype", "HMM.category",
+  "Mechanism.group", "Mechanism.subgroup",
+  "Mechanism.subgroup2", "Rank"
+)
+
+library(dplyr)
+library(purrr)
+library(tibble)
+
+# 1. 放入列表
+abun_list <- list(
+  raw_106 = nor_cell_sub_raw_106,
+  raw_198 = nor_cell_sub_raw_198,
+  raw_ld  = nor_cell_sub_raw_ld,
+  raw_my  = nor_cell_sub_raw_my
+)
+
+# 2. 整理每个表
+# 默认使用第一列作为 ARG subtype / feature ID
+prepare_abun <- function(df) {
+  
+  df <- as.data.frame(df, check.names = FALSE)
+  
+  # 如果第一列是字符型，认为第一列是 ARG subtype
+  if (is.character(df[[1]]) | is.factor(df[[1]])) {
+    names(df)[1] <- "ARG_subtype"
+  } else {
+    # 如果第一列不是字符型，则使用行名作为 ARG_subtype
+    df <- rownames_to_column(df, var = "ARG_subtype")
+  }
+  
+  df %>%
+    as_tibble() %>%
+    mutate(ARG_subtype = as.character(ARG_subtype)) %>%
+    mutate(across(-ARG_subtype, ~ suppressWarnings(as.numeric(.x)))) %>%
+    group_by(ARG_subtype) %>%
+    summarise(
+      across(everything(), ~ sum(.x, na.rm = TRUE)),
+      .groups = "drop"
+    )
+}
+
+abun_list2 <- map(abun_list, prepare_abun)
+
+# 3. 按 ARG_subtype 横向合并
+nor_cell_sub_raw_all <- reduce(
+  abun_list2,
+  full_join,
+  by = "ARG_subtype"
+)
+
+# 4. 缺失丰度补 0
+nor_cell_sub_raw_all <- nor_cell_sub_raw_all %>%
+  mutate(across(-ARG_subtype, ~ replace_na(.x, 0)))
+
+# 5. 查看合并结果
+dim(nor_cell_sub_raw_all)
+head(nor_cell_sub_raw_all[, 1:6])
+
+____________________________________________________________________________________________________________________
+# ============================================================
+# ARG abundance analysis based on:
+#   sample metadata: othersam5
+#   ARG abundance  : nor_cell_sub_raw_all
+#   annotation DB  : combined_db
+# ============================================================
+
+rm(list = setdiff(ls(), c("othersam5", "nor_cell_sub_raw_all", "combined_db")))
+
+library(tidyverse)
+library(vegan)
+library(pheatmap)
+library(scales)
+library(ggpubr)
+library(rstatix)
+library(RColorBrewer)
+library(multcompView)
+
+set.seed(123)
+
+output <- "outp/ARG_othersam5_2"
+dir.create(output, recursive = TRUE, showWarnings = FALSE)
+
+core_threshold <- 0.1
+zero_prop_threshold <- 1
+
+# -----------------------------
+# 1. 整理样本信息表 othersam5
+# -----------------------------
+sample_all <- othersam5 %>%
+  mutate(
+    sample = as.character(sample),
+    city = as.character(city),
+    country = as.character(country),
+    type = as.character(type),
+    type1 = as.character(type1),
+    source = as.character(source),
+    longitude = as.numeric(longitude),
+    latitude = as.numeric(latitude)
+  ) %>%
+  mutate(across(where(is.character), ~ str_trim(.x))) %>%
+  mutate(across(where(is.character), ~ na_if(.x, ""))) %>%
+  mutate(
+    city = coalesce(city, "Unknown"),
+    country = coalesce(country, "Unknown"),
+    type = coalesce(type, "Unknown"),
+    type1 = coalesce(type1, type),
+    source = coalesce(source, "Unknown")
+  ) %>%
+  distinct(sample, .keep_all = TRUE)
+
+# -----------------------------
+# 2. 整理注释库 combined_db
+# -----------------------------
+colnames(combined_db) <- colnames(combined_db) %>%
+  str_replace("^\\ufeff", "") %>%
+  str_trim()
+
+if (!"subtype" %in% colnames(combined_db) & "ARG_subtype" %in% colnames(combined_db)) {
+  combined_db <- combined_db %>%
+    rename(subtype = ARG_subtype)
+}
+
+arg_db <- combined_db %>%
+  mutate(subtype = as.character(subtype)) %>%
+  distinct(subtype, .keep_all = TRUE)
+
+# -----------------------------
+# 3. 整理 ARG subtype 丰度表 nor_cell_sub_raw_all
+# -----------------------------
+colnames(nor_cell_sub_raw_all) <- colnames(nor_cell_sub_raw_all) %>%
+  str_replace("^\\ufeff", "") %>%
+  str_trim()
+
+if (!"subtype" %in% colnames(nor_cell_sub_raw_all)) {
+  colnames(nor_cell_sub_raw_all)[1] <- "subtype"
+}
+
+sample_cols <- intersect(colnames(nor_cell_sub_raw_all), sample_all$sample)
+
+sample_match_check <- tibble(
+  n_sample_in_abundance = length(setdiff(colnames(nor_cell_sub_raw_all), "subtype")),
+  n_sample_in_metadata = nrow(sample_all),
+  n_matched_sample = length(sample_cols),
+  abundance_only_no_metadata = paste(setdiff(colnames(nor_cell_sub_raw_all), c("subtype", sample_all$sample)), collapse = ";"),
+  metadata_only_no_abundance = paste(setdiff(sample_all$sample, colnames(nor_cell_sub_raw_all)), collapse = ";")
+)
+
+write_csv(sample_match_check, file.path(output, "sample_metadata_abundance_match_check.csv"))
+print(sample_match_check)
+
+sample_all <- sample_all %>%
+  filter(sample %in% sample_cols)
+
+arg_all <- nor_cell_sub_raw_all %>%
+  select(subtype, all_of(sample_cols)) %>%
+  mutate(
+    subtype = as.character(subtype),
+    across(all_of(sample_cols), ~ suppressWarnings(as.numeric(.x)))
+  ) %>%
+  group_by(subtype) %>%
+  summarise(
+    across(all_of(sample_cols), ~ sum(.x, na.rm = TRUE)),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    n_sample = length(sample_cols),
+    n_zero = rowSums(across(all_of(sample_cols), ~ is.na(.x) | .x == 0)),
+    zero_prop = n_zero / n_sample
+  ) %>%
+  filter(zero_prop < zero_prop_threshold) %>%
+  left_join(arg_db, by = "subtype") %>%
+  mutate(
+    Total = rowSums(across(all_of(sample_cols)), na.rm = TRUE),
+    total_per = Total / sum(Total, na.rm = TRUE) * 100
+  )
+
+write_csv(arg_all, file.path(output, "ARG_subtype_abundance_filtered_annotated.csv"))
+
+arg_filter_summary <- tibble(
+  n_sample = length(sample_cols),
+  zero_prop_threshold = zero_prop_threshold,
+  n_subtype_after_filter = nrow(arg_all)
+)
+
+write_csv(arg_filter_summary, file.path(output, "ARG_subtype_filter_summary.csv"))
+
+# -----------------------------
+# 4. 构建 ARG 长表和样本总丰度表
+# -----------------------------
+arg_long_all <- arg_all %>%
+  pivot_longer(
+    cols = all_of(sample_cols),
+    names_to = "sample",
+    values_to = "value"
+  ) %>%
+  left_join(sample_all, by = "sample", suffix = c("", "_sample"))
+
+arg_total_all <- tibble(
+  sample = sample_cols,
+  ARG_abundance = colSums(as.matrix(arg_all[, sample_cols, drop = FALSE]), na.rm = TRUE)
+) %>%
+  left_join(sample_all, by = "sample")
+
+write_csv(sample_all, file.path(output, "sample_othersam5_matched.csv"))
+write_csv(arg_long_all, file.path(output, "arg_subtype_long_othersam5.csv"))
+write_csv(arg_total_all, file.path(output, "arg_total_abundance_othersam5.csv"))
+
+# -----------------------------
+# 5. 基本统计
+# -----------------------------
+sample_subtype_abundance <- arg_long_all %>%
+  group_by(source, sample) %>%
+  summarise(
+    sample_subtype_abundance = sum(value, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+subtype_summary <- arg_long_all %>%
+  group_by(source) %>%
+  summarise(
+    n_sample = n_distinct(sample),
+    n_subtype = n_distinct(subtype),
+    n_ARG_type = n_distinct(type, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  left_join(
+    sample_subtype_abundance %>%
+      group_by(source) %>%
+      summarise(
+        mean_sample_subtype_abundance = mean(sample_subtype_abundance, na.rm = TRUE),
+        median_sample_subtype_abundance = median(sample_subtype_abundance, na.rm = TRUE),
+        sd_sample_subtype_abundance = sd(sample_subtype_abundance, na.rm = TRUE),
+        min_sample_subtype_abundance = min(sample_subtype_abundance, na.rm = TRUE),
+        max_sample_subtype_abundance = max(sample_subtype_abundance, na.rm = TRUE),
+        .groups = "drop"
+      ),
+    by = "source"
+  )
+
+source_total_summary <- arg_total_all %>%
+  group_by(source) %>%
+  summarise(
+    n_sample = n_distinct(sample),
+    mean_sample_ARG_abundance = mean(ARG_abundance, na.rm = TRUE),
+    median_sample_ARG_abundance = median(ARG_abundance, na.rm = TRUE),
+    sd_sample_ARG_abundance = sd(ARG_abundance, na.rm = TRUE),
+    min_sample_ARG_abundance = min(ARG_abundance, na.rm = TRUE),
+    max_sample_ARG_abundance = max(ARG_abundance, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+sample_type_summary <- arg_total_all %>%
+  mutate(sample_type = coalesce(type1, type, "Unknown")) %>%
+  group_by(sample_type) %>%
+  summarise(
+    n_source = n_distinct(source),
+    sources = paste(sort(unique(source)), collapse = ";"),
+    n_sample = n_distinct(sample),
+    mean_sample_ARG_abundance = mean(ARG_abundance, na.rm = TRUE),
+    median_sample_ARG_abundance = median(ARG_abundance, na.rm = TRUE),
+    sd_sample_ARG_abundance = sd(ARG_abundance, na.rm = TRUE),
+    min_sample_ARG_abundance = min(ARG_abundance, na.rm = TRUE),
+    max_sample_ARG_abundance = max(ARG_abundance, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_sample_ARG_abundance))
+
+source_type_summary <- arg_total_all %>%
+  mutate(sample_type = coalesce(type1, type, "Unknown")) %>%
+  group_by(source, sample_type) %>%
+  summarise(
+    n_sample = n_distinct(sample),
+    mean_sample_ARG_abundance = mean(ARG_abundance, na.rm = TRUE),
+    median_sample_ARG_abundance = median(ARG_abundance, na.rm = TRUE),
+    sd_sample_ARG_abundance = sd(ARG_abundance, na.rm = TRUE),
+    min_sample_ARG_abundance = min(ARG_abundance, na.rm = TRUE),
+    max_sample_ARG_abundance = max(ARG_abundance, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(source, desc(mean_sample_ARG_abundance))
+
+write_csv(sample_subtype_abundance, file.path(output, "sample_subtype_abundance_by_source.csv"))
+write_csv(subtype_summary, file.path(output, "summary_ARG_subtype_by_source.csv"))
+write_csv(source_total_summary, file.path(output, "summary_total_ARG_by_source.csv"))
+write_csv(sample_type_summary, file.path(output, "summary_total_ARG_by_sample_type.csv"))
+write_csv(source_type_summary, file.path(output, "summary_total_ARG_by_source_and_sample_type.csv"))
+
+# -----------------------------
+# 6. 总 ARG 丰度差异：按 type 分组
+# -----------------------------
+total_type_test_data <- arg_total_all %>%
+  mutate(sample_type = coalesce(type1, type, "Unknown")) %>%
+  filter(!is.na(sample_type))
+
+type_order <- total_type_test_data %>%
+  group_by(sample_type) %>%
+  summarise(mean_abun = mean(ARG_abundance, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(mean_abun)) %>%
+  pull(sample_type)
+
+total_type_test_data <- total_type_test_data %>%
+  mutate(sample_type = factor(sample_type, levels = type_order))
+
+arg_total_type_stats <- total_type_test_data %>%
+  group_by(sample_type) %>%
+  summarise(
+    n_source = n_distinct(source),
+    sources = paste(sort(unique(source)), collapse = ";"),
+    n_sample = n_distinct(sample),
+    mean_abun = mean(ARG_abundance, na.rm = TRUE),
+    median_abun = median(ARG_abundance, na.rm = TRUE),
+    sd_abun = sd(ARG_abundance, na.rm = TRUE),
+    min_abun = min(ARG_abundance, na.rm = TRUE),
+    max_abun = max(ARG_abundance, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_abun))
+
+write_csv(arg_total_type_stats, file.path(output, "arg_total_abundance_summary_by_type1.csv"))
+
+if (n_distinct(total_type_test_data$sample_type) >= 2) {
+  
+  kruskal_type <- kruskal.test(ARG_abundance ~ sample_type, data = total_type_test_data)
+  
+  sink(file.path(output, "arg_total_type_kruskal.txt"))
+  print(kruskal_type)
+  sink()
+  
+  pairwise_type <- total_type_test_data %>%
+    pairwise_wilcox_test(ARG_abundance ~ sample_type, p.adjust.method = "BH") %>%
+    add_significance()
+  
+  write_csv(pairwise_type, file.path(output, "arg_total_type_pairwise_wilcox.csv"))
+  
+  p_vec <- pairwise_type$p.adj
+  names(p_vec) <- paste(pairwise_type$group1, pairwise_type$group2, sep = "-")
+  
+  letters_df <- tibble(
+    sample_type = names(multcompView::multcompLetters(
+      p_vec,
+      compare = "<",
+      threshold = 0.05,
+      Letters = letters
+    )$Letters),
+    letters = multcompView::multcompLetters(
+      p_vec,
+      compare = "<",
+      threshold = 0.05,
+      Letters = letters
+    )$Letters
+  ) %>%
+    mutate(sample_type = factor(sample_type, levels = levels(total_type_test_data$sample_type))) %>%
+    left_join(
+      total_type_test_data %>%
+        group_by(sample_type) %>%
+        summarise(y = max(ARG_abundance, na.rm = TRUE), .groups = "drop"),
+      by = "sample_type"
+    ) %>%
+    mutate(
+      y_range = diff(range(total_type_test_data$ARG_abundance, na.rm = TRUE)),
+      y_range = if_else(y_range == 0, 0.1, y_range),
+      y = y + 0.06 * y_range
+    )
+  
+  p_total_type <- ggplot(
+    total_type_test_data,
+    aes(x = sample_type, y = ARG_abundance, fill = sample_type)
+  ) +
+    geom_boxplot(width = 0.55, outlier.shape = NA, alpha = 0.7) +
+    geom_jitter(aes(shape = source), width = 0.15, size = 2, alpha = 0.75) +
+    geom_point(
+      data = arg_total_type_stats,
+      aes(x = sample_type, y = mean_abun),
+      shape = 23,
+      size = 4,
+      fill = "red",
+      inherit.aes = FALSE
+    ) +
+    stat_compare_means(method = "kruskal.test", label = "p.format") +
+    geom_text(
+      data = letters_df,
+      aes(x = sample_type, y = y, label = letters),
+      inherit.aes = FALSE,
+      size = 5,
+      fontface = "bold"
+    ) +
+    theme_bw() +
+    theme(
+      panel.grid = element_blank(),
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      legend.position = "right"
+    ) +
+    labs(
+      x = "Sample type",
+      y = "Total ARG abundance",
+      fill = "Sample type",
+      shape = "Source"
+    )
+  
+  save(p_total_type, file = file.path(output, "p_total_ARG_abundance_by_type_abc.rda"))
+  ggsave(file.path(output, "p_total_ARG_abundance_by_type_abc.pdf"), p_total_type, width = 9, height = 6)
+}
+
+# -----------------------------
+# 7. sample × subtype 矩阵、PERMANOVA、NMDS
+# -----------------------------
+arg_matrix_df <- arg_long_all %>%
+  mutate(sample_uid = paste(source, sample, sep = "__")) %>%
+  group_by(sample_uid, subtype) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(
+    names_from = subtype,
+    values_from = value,
+    values_fill = 0
+  )
+
+all_mat <- arg_matrix_df %>%
+  column_to_rownames("sample_uid") %>%
+  as.matrix()
+
+group_df <- sample_all %>%
+  mutate(
+    sample_uid = paste(source, sample, sep = "__"),
+    sample_type = coalesce(type1, type, "Unknown"),
+    sample_type1 = sample_type
+  ) %>%
+  filter(sample_uid %in% rownames(all_mat)) %>%
+  distinct(sample_uid, .keep_all = TRUE) %>%
+  arrange(match(sample_uid, rownames(all_mat))) %>%
+  as.data.frame()
+
+rownames(group_df) <- group_df$sample_uid
+
+all_mat <- all_mat[rownames(group_df), , drop = FALSE]
+all_mat <- all_mat[rowSums(all_mat, na.rm = TRUE) > 0, , drop = FALSE]
+all_mat <- all_mat[, colSums(all_mat, na.rm = TRUE) > 0, drop = FALSE]
+group_df <- group_df[rownames(all_mat), , drop = FALSE]
+group_df$sample_type <- factor(group_df$sample_type)
+
+write_csv(
+  group_df %>% rownames_to_column("sample_uid_rowname"),
+  file.path(output, "ARG_matrix_group_info_by_sample_type.csv")
+)
+
+if (n_distinct(group_df$sample_type) >= 2 && nrow(all_mat) >= 3) {
+  
+  permanova_type <- adonis2(all_mat ~ sample_type, data = group_df, method = "bray")
+  
+  sink(file.path(output, "permanova_ARG_composition_by_sample_type.txt"))
+  print(permanova_type)
+  sink()
+  
+  pairwise_permanova_type <- combn(levels(group_df$sample_type), 2, simplify = FALSE) %>%
+    map_dfr(~ {
+      keep_samples <- group_df$sample_type %in% .x
+      
+      if (sum(keep_samples) < 3 || n_distinct(group_df$sample_type[keep_samples]) < 2) {
+        tibble(group1 = .x[1], group2 = .x[2], F = NA_real_, R2 = NA_real_, p = NA_real_)
+      } else {
+        ad <- adonis2(
+          all_mat[keep_samples, , drop = FALSE] ~ sample_type,
+          data = group_df[keep_samples, , drop = FALSE] %>%
+            mutate(sample_type = factor(sample_type, levels = .x)),
+          method = "bray"
+        )
+        
+        tibble(
+          group1 = .x[1],
+          group2 = .x[2],
+          F = ad$F[1],
+          R2 = ad$R2[1],
+          p = ad$`Pr(>F)`[1]
+        )
+      }
+    }) %>%
+    mutate(
+      p_adj = p.adjust(p, method = "BH"),
+      significance = case_when(
+        is.na(p_adj) ~ NA_character_,
+        p_adj < 0.001 ~ "***",
+        p_adj < 0.01 ~ "**",
+        p_adj < 0.05 ~ "*",
+        TRUE ~ "ns"
+      )
+    )
+  
+  write_csv(pairwise_permanova_type, file.path(output, "pairwise_permanova_ARG_composition_by_sample_type.csv"))
+}
+
+if (nrow(all_mat) >= 3 && ncol(all_mat) >= 2) {
+  
+  bray_dis <- vegdist(all_mat, method = "bray")
+  nmds <- metaMDS(bray_dis, k = 2, trymax = 999)
+  
+  nmds_site <- as.data.frame(nmds$points) %>%
+    rownames_to_column("sample_uid") %>%
+    left_join(
+      group_df %>%
+        rownames_to_column("rowname") %>%
+        select(-rowname),
+      by = "sample_uid"
+    )
+  
+  ellipse_group <- nmds_site %>%
+    group_by(sample_type) %>%
+    filter(n() >= 3) %>%
+    ungroup()
+  
+  p_nmds_type <- ggplot(nmds_site, aes(x = MDS1, y = MDS2)) +
+    geom_point(aes(color = sample_type, shape = source), size = 2.6, alpha = 0.85) +
+    stat_ellipse(
+      data = ellipse_group,
+      aes(fill = sample_type),
+      geom = "polygon",
+      level = 0.95,
+      alpha = 0.12,
+      show.legend = FALSE
+    ) +
+    theme_bw() +
+    theme(panel.grid = element_blank()) +
+    labs(
+      title = paste0("NMDS based on ARG subtype profiles; stress = ", round(nmds$stress, 4)),
+      x = "NMDS1",
+      y = "NMDS2",
+      color = "Sample type",
+      shape = "Source"
+    )
+  
+  save(p_nmds_type, file = file.path(output, "p_NMDS_ARG_by_sample_type.rda"))
+  ggsave(file.path(output, "p_NMDS_ARG_by_sample_type.pdf"), p_nmds_type, width = 6.5, height = 5)
+}
+
+# -----------------------------
+# 8. ARG type 组成
+# -----------------------------
+arg_type_long <- arg_long_all %>%
+  mutate(
+    sample_type = coalesce(type1, type_sample, "Unknown"),
+    sample_type1 = sample_type,
+    arg_type = replace_na(type, "others")
+  ) %>%
+  group_by(sample_type, source, sample, arg_type) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop")
+
+arg_type_colors <- c(
+  brewer.pal(12, "Paired"),
+  brewer.pal(8, "Dark2"),
+  brewer.pal(8, "Set2"),
+  brewer.pal(8, "Accent")
+)
+
+arg_type_colors <- rep(arg_type_colors, length.out = n_distinct(arg_type_long$arg_type))
+names(arg_type_colors) <- unique(arg_type_long$arg_type)
+
+arg_type_by_sample_type <- arg_type_long %>%
+  group_by(sample_type, arg_type) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop") %>%
+  group_by(sample_type) %>%
+  mutate(type_percent = value / sum(value, na.rm = TRUE) * 100) %>%
+  ungroup()
+
+write_csv(arg_type_long, file.path(output, "ARG_type_long_by_sample_type.csv"))
+write_csv(arg_type_by_sample_type, file.path(output, "ARG_type_composition_by_sample_type.csv"))
+
+p_arg_type_composition_by_sample_type <- ggplot(
+  arg_type_by_sample_type,
+  aes(x = sample_type, y = value, fill = arg_type)
+) +
+  geom_col(position = "fill", width = 0.75) +
+  scale_fill_manual(values = arg_type_colors, na.value = "gray70") +
+  scale_y_continuous(labels = percent_format()) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank(),
+    legend.position = "right"
+  ) +
+  labs(x = "Sample type", y = "Relative abundance", fill = "ARG type")
+
+save(p_arg_type_composition_by_sample_type, file = file.path(output, "p_ARG_type_composition_by_sample_type.rda"))
+ggsave(file.path(output, "p_ARG_type_composition_by_sample_type.pdf"),
+       p_arg_type_composition_by_sample_type, width = 8, height = 5)
+
+# -----------------------------
+# 9. Mechanism.group 组成
+# -----------------------------
+arg_mechanism_long <- arg_long_all %>%
+  mutate(
+    sample_type = coalesce(type1, type_sample, "Unknown"),
+    sample_type1 = sample_type,
+    Mechanism.group = replace_na(Mechanism.group, "Others")
+  ) %>%
+  group_by(sample_type, source, sample, Mechanism.group) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop")
+
+mechanism_by_sample_type <- arg_mechanism_long %>%
+  group_by(sample_type, Mechanism.group) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop") %>%
+  group_by(sample_type) %>%
+  mutate(mechanism_percent = value / sum(value, na.rm = TRUE) * 100) %>%
+  ungroup()
+
+write_csv(arg_mechanism_long, file.path(output, "ARG_mechanism_long_by_sample_type.csv"))
+write_csv(mechanism_by_sample_type, file.path(output, "ARG_mechanism_composition_by_sample_type.csv"))
+
+p_mechanism_composition_by_sample_type <- ggplot(
+  mechanism_by_sample_type,
+  aes(x = sample_type, y = value, fill = Mechanism.group)
+) +
+  geom_col(position = "fill", width = 0.75) +
+  scale_y_continuous(labels = percent_format()) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank(),
+    legend.position = "right"
+  ) +
+  labs(x = "Sample type", y = "Relative abundance", fill = "Mechanism")
+
+save(p_mechanism_composition_by_sample_type, file = file.path(output, "p_ARG_mechanism_composition_by_sample_type.rda"))
+ggsave(file.path(output, "p_ARG_mechanism_composition_by_sample_type.pdf"),
+       p_mechanism_composition_by_sample_type, width = 8, height = 5)
+
+# -----------------------------
+# 10. Rank 组成
+# -----------------------------
+arg_rank_long <- arg_long_all %>%
+  mutate(
+    sample_type = coalesce(type1, type_sample, "Unknown"),
+    sample_type1 = sample_type,
+    Rank = replace_na(Rank, "Unknown")
+  ) %>%
+  group_by(sample_type, source, sample, Rank) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop")
+
+rank_by_sample_type <- arg_rank_long %>%
+  group_by(sample_type, Rank) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop") %>%
+  group_by(sample_type) %>%
+  mutate(rank_percent = value / sum(value, na.rm = TRUE) * 100) %>%
+  ungroup()
+
+write_csv(arg_rank_long, file.path(output, "ARG_rank_long_by_sample_type.csv"))
+write_csv(rank_by_sample_type, file.path(output, "ARG_rank_composition_by_sample_type.csv"))
+
+rank_colors <- c(
+  "I" = "#DD3497",
+  "II" = "#F768A1",
+  "III" = "#FA9FB5",
+  "IV" = "#FCC5C0",
+  "Unknown" = "gray70"
+)
+
+p_rank_composition_by_sample_type <- ggplot(
+  rank_by_sample_type,
+  aes(x = sample_type, y = value, fill = Rank)
+) +
+  geom_col(position = "fill", width = 0.75) +
+  scale_fill_manual(values = rank_colors, na.value = "gray70", drop = FALSE) +
+  scale_y_continuous(labels = percent_format()) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank(),
+    legend.position = "right"
+  ) +
+  labs(x = "Sample type", y = "Relative abundance", fill = "Risk rank")
+
+save(p_rank_composition_by_sample_type, file = file.path(output, "p_ARG_rank_composition_by_sample_type.rda"))
+ggsave(file.path(output, "p_ARG_rank_composition_by_sample_type.pdf"),
+       p_rank_composition_by_sample_type, width = 8, height = 5)
+
+# -----------------------------
+# 11. 核心 subtype
+# -----------------------------
+mean_by_subtype <- arg_long_all %>%
+  mutate(sample_type = coalesce(type1, type_sample, "Unknown")) %>%
+  group_by(sample_type, subtype) %>%
+  summarise(mean_value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+  group_by(sample_type) %>%
+  mutate(sub_per = mean_value / sum(mean_value, na.rm = TRUE) * 100) %>%
+  ungroup() %>%
+  left_join(arg_db, by = "subtype") %>%
+  arrange(sample_type, desc(sub_per))
+
+core_subtype <- mean_by_subtype %>%
+  filter(sub_per > core_threshold)
+
+core_summary_type <- core_subtype %>%
+  mutate(type = replace_na(type, "others")) %>%
+  group_by(sample_type, type) %>%
+  summarise(type_per = sum(sub_per, na.rm = TRUE), .groups = "drop") %>%
+  arrange(sample_type, desc(type_per))
+
+core_summary_mechanism <- core_subtype %>%
+  mutate(Mechanism.group = replace_na(Mechanism.group, "Others")) %>%
+  group_by(sample_type, Mechanism.group) %>%
+  summarise(func_per = sum(sub_per, na.rm = TRUE), .groups = "drop") %>%
+  arrange(sample_type, desc(func_per))
+
+core_summary_rank <- core_subtype %>%
+  mutate(Rank = replace_na(Rank, "Unknown")) %>%
+  group_by(sample_type, Rank) %>%
+  summarise(rank_per = sum(sub_per, na.rm = TRUE), .groups = "drop") %>%
+  arrange(sample_type, desc(rank_per))
+
+write_csv(mean_by_subtype, file.path(output, "mean_by_subtype_by_sample_type.csv"))
+write_csv(core_subtype, file.path(output, "core_subtype_gt_0.1percent_by_sample_type.csv"))
+write_csv(core_summary_type, file.path(output, "core_subtype_ARG_type_percent_by_sample_type.csv"))
+write_csv(core_summary_mechanism, file.path(output, "core_subtype_mechanism_percent_by_sample_type.csv"))
+write_csv(core_summary_rank, file.path(output, "core_subtype_rank_percent_by_sample_type.csv"))
+
+# -----------------------------
+# 12. 保存对象
+# -----------------------------
+save(
+  sample_all,
+  arg_db,
+  arg_all,
+  arg_long_all,
+  arg_total_all,
+  all_mat,
+  group_df,
+  subtype_summary,
+  source_total_summary,
+  sample_type_summary,
+  source_type_summary,
+  total_type_test_data,
+  arg_total_type_stats,
+  mean_by_subtype,
+  core_subtype,
+  file = file.path(output, "ARG_othersam5_clean_objects.rda")
+)
+
+# ============================================================
+# 脚本结束
+# ============================================================
+
+arg_total_type_stats <- total_type_test_data %>%
+  group_by(sample_type) %>%
+  summarise(
+    n_source = n_distinct(source),
+    sources = paste(sort(unique(source)), collapse = ";"),
+    n_sample = n_distinct(sample),
+    mean_abun = mean(ARG_abundance, na.rm = TRUE),
+    median_abun = median(ARG_abundance, na.rm = TRUE),
+    sd_abun = sd(ARG_abundance, na.rm = TRUE),
+    min_abun = min(ARG_abundance, na.rm = TRUE),
+    max_abun = max(ARG_abundance, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_abun))
+y_range <- diff(range(total_type_test_data$ARG_abundance, na.rm = TRUE))
+if (y_range == 0) y_range <- 0.1
+
+p_total_type <- ggplot(
+  total_type_test_data,
+  aes(x = sample_type, y = ARG_abundance, fill = sample_type)
+) +
+  geom_boxplot(width = 0.55, outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(aes(shape = source), width = 0.15, size = 2, alpha = 0.75) +
+  
+  # 平均数
+  geom_point(
+    data = arg_total_type_stats,
+    aes(x = sample_type, y = mean_abun),
+    shape = 23,
+    size = 4,
+    fill = "red",
+    color = "black",
+    inherit.aes = FALSE
+  ) +
+  
+  # 中位数
+  geom_point(
+    data = arg_total_type_stats,
+    aes(x = sample_type, y = median_abun),
+    shape = 21,
+    size = 3.5,
+    fill = "blue",
+    color = "black",
+    inherit.aes = FALSE
+  ) +
+  
+  # 平均数数值标签
+  geom_text(
+    data = arg_total_type_stats,
+    aes(
+      x = sample_type,
+      y = mean_abun,
+      label = paste0("Mean=", round(mean_abun, 3))
+    ),
+    inherit.aes = FALSE,
+    vjust = -1,
+    size = 3.2,
+    color = "red"
+  ) +
+  
+  # 中位数数值标签
+  geom_text(
+    data = arg_total_type_stats,
+    aes(
+      x = sample_type,
+      y = median_abun,
+      label = paste0("Median=", round(median_abun, 3))
+    ),
+    inherit.aes = FALSE,
+    vjust = 1.8,
+    size = 3.2,
+    color = "blue"
+  ) +
+  
+  stat_compare_means(method = "kruskal.test", label = "p.format") +
+  
+  geom_text(
+    data = letters_df,
+    aes(x = sample_type, y = y, label = letters),
+    inherit.aes = FALSE,
+    size = 5,
+    fontface = "bold"
+  ) +
+  
+  expand_limits(
+    y = max(
+      c(
+        total_type_test_data$ARG_abundance,
+        letters_df$y,
+        arg_total_type_stats$mean_abun + 0.15 * y_range
+      ),
+      na.rm = TRUE
+    )
+  ) +
+  
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right"
+  ) +
+  labs(
+    x = "Sample type",
+    y = "Total ARG abundance",
+    fill = "Sample type",
+    shape = "Source"
+  )
+
+p_total_type
+
+save(p_total_type, file = file.path(output, "p_total_ARG_abundance_by_type_abc.rda"))
+ggsave(file.path(output, "p_total_ARG_abundance_by_type_abc.pdf"),
+       p_total_type, width = 10, height = 6)
+
+
+# -----------------------------
+# ARG type：按 type1 汇总绝对丰度
+# -----------------------------
+arg_type_by_type1 <- arg_long_all %>%
+  mutate(
+    sample_type1 = coalesce(type1, type_sample, "Unknown"),
+    arg_type = replace_na(type, "others")
+  ) %>%
+  group_by(sample_type1, arg_type) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop")
+
+write_csv(arg_type_by_type1, file.path(output, "ARG_type_absolute_by_type1.csv"))
+
+n_arg_type <- n_distinct(arg_type_by_type1$arg_type)
+arg_type_colors <- c(
+  brewer.pal(12, "Paired"),
+  brewer.pal(8, "Dark2"),
+  brewer.pal(8, "Set2"),
+  brewer.pal(8, "Accent")
+)
+arg_type_colors <- rep(arg_type_colors, length.out = n_arg_type)
+names(arg_type_colors) <- unique(arg_type_by_type1$arg_type)
+
+p_arg_type_absolute_by_type1 <- ggplot(
+  arg_type_by_type1,
+  aes(x = sample_type1, y = value, fill = arg_type)
+) +
+  geom_col(position = "stack", width = 0.75) +
+  scale_fill_manual(values = arg_type_colors, na.value = "gray70") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank(),
+    legend.position = "right"
+  ) +
+  labs(
+    x = "type1",
+    y = "ARG absolute abundance",
+    fill = "ARG type"
+  ) +
+  guides(fill = guide_legend(ncol = 1))
+
+p_arg_type_absolute_by_type1
+save(p_arg_type_absolute_by_type1, file = file.path(output, "p_ARG_type_absolute_by_type1.rda"))
+ggsave(file.path(output, "p_ARG_type_absolute_by_type1.pdf"),
+       p_arg_type_absolute_by_type1, width = 8, height = 5)
+# -----------------------------
+# ARG mechanism：按 type1 汇总绝对丰度
+# -----------------------------
+arg_mechanism_by_type1 <- arg_long_all %>%
+  mutate(
+    sample_type1 = coalesce(type1, type_sample, "Unknown"),
+    Mechanism.group = replace_na(Mechanism.group, "Others")
+  ) %>%
+  group_by(sample_type1, Mechanism.group) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop")
+
+write_csv(arg_mechanism_by_type1, file.path(output, "ARG_mechanism_absolute_by_type1.csv"))
+
+mech_levels <- c(
+  "Enzymatic inactivation", "Antibiotic target alteration",
+  "Antibiotic target replacement", "Efflux pump",
+  "Antibiotic target protection", "Reduced permeability",
+  "Efflux pump RND family", "Others"
+)
+
+arg_mechanism_by_type1 <- arg_mechanism_by_type1 %>%
+  mutate(Mechanism.group = factor(Mechanism.group, levels = mech_levels))
+
+mech_colors <- c(
+  "#8DD3C7", "#FFFFB3", "#BEBADA", "#FB8072",
+  "#80B1D3", "#FDB462", "#B3DE69", "#D9D9D9"
+)
+names(mech_colors) <- mech_levels
+
+p_mechanism_absolute_by_type1 <- ggplot(
+  arg_mechanism_by_type1,
+  aes(x = sample_type1, y = value, fill = Mechanism.group)
+) +
+  geom_col(position = "stack", width = 0.75) +
+  scale_fill_manual(values = mech_colors, na.value = "gray70", drop = FALSE) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank(),
+    legend.position = "right"
+  ) +
+  labs(
+    x = "type1",
+    y = "ARG absolute abundance",
+    fill = "Mechanism"
+  )
+
+p_mechanism_absolute_by_type1
+save(p_mechanism_absolute_by_type1, file = file.path(output, "p_ARG_mechanism_absolute_by_type1.rda"))
+ggsave(file.path(output, "p_ARG_mechanism_absolute_by_type1.pdf"),
+       p_mechanism_absolute_by_type1, width = 8, height = 5)
+# -----------------------------
+# ARG rank：按 type1 汇总绝对丰度
+# -----------------------------
+arg_rank_by_type1 <- arg_long_all %>%
+  mutate(
+    sample_type1 = coalesce(type1, type_sample, "Unknown"),
+    Rank = replace_na(Rank, "Unknown")
+  ) %>%
+  group_by(sample_type1, Rank) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop")
+
+write_csv(arg_rank_by_type1, file.path(output, "ARG_rank_absolute_by_type1.csv"))
+
+rank_colors <- c(
+  "I" = "#DD3497",
+  "II" = "#F768A1",
+  "III" = "#FA9FB5",
+  "IV" = "#FCC5C0",
+  "Unknown" = "gray70"
+)
+
+p_rank_absolute_by_type1 <- ggplot(
+  arg_rank_by_type1,
+  aes(x = sample_type1, y = value, fill = Rank)
+) +
+  geom_col(position = "stack", width = 0.75) +
+  scale_fill_manual(values = rank_colors, na.value = "gray70", drop = FALSE) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank(),
+    legend.position = "right"
+  ) +
+  labs(
+    x = "type1",
+    y = "ARG absolute abundance",
+    fill = "Risk rank"
+  )
+
+p_rank_absolute_by_type1
+save(p_rank_absolute_by_type1, file = file.path(output, "p_ARG_rank_absolute_by_type1.rda"))
+ggsave(file.path(output, "p_ARG_rank_absolute_by_type1.pdf"),
+       p_rank_absolute_by_type1, width = 8, height = 5)
+
+
+# -----------------------------
+# sample 为 x 轴，按 type1 分面：ARG type 绝对丰度
+# -----------------------------
+arg_type_long_type1 <- arg_long_all %>%
+  mutate(
+    sample_type1 = coalesce(type1, type_sample, "Unknown"),
+    arg_type = replace_na(type, "others")
+  ) %>%
+  group_by(sample_type1, source, sample, arg_type) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop")
+
+write_csv(arg_type_long_type1, file.path(output, "ARG_type_long_by_sample_and_type1.csv"))
+
+p_arg_type_stack_by_type1 <- ggplot(
+  arg_type_long_type1,
+  aes(x = sample, y = value, fill = arg_type)
+) +
+  geom_col(width = 0.75) +
+  scale_fill_manual(values = arg_type_colors, na.value = "gray70") +
+  facet_grid(. ~ sample_type1, scales = "free_x", space = "free_x") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+    panel.grid = element_blank(),
+    legend.position = "right"
+  ) +
+  labs(
+    x = "Sample",
+    y = "ARG absolute abundance",
+    fill = "ARG type"
+  ) +
+  guides(fill = guide_legend(ncol = 1))
+
+p_arg_type_stack_by_type1
+save(p_arg_type_stack_by_type1, file = file.path(output, "p_ARG_type_stack_by_type1.rda"))
+ggsave(file.path(output, "p_ARG_type_stack_by_type1.pdf"),
+       p_arg_type_stack_by_type1, width = 13, height = 5)
+
+# -----------------------------
+# sample 为 x 轴，按 type1 分面：ARG type 绝对丰度
+# -----------------------------
+arg_type_long_type1 <- arg_long_all %>%
+  mutate(
+    sample_type1 = coalesce(type1, type_sample, "Unknown"),
+    arg_type = replace_na(type, "others")
+  ) %>%
+  group_by(sample_type1, source, sample, arg_type) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop")
+
+write_csv(arg_type_long_type1, file.path(output, "ARG_type_long_by_sample_and_type1.csv"))
+
+p_arg_type_stack_by_type1 <- ggplot(
+  arg_type_long_type1,
+  aes(x = sample, y = value, fill = arg_type)
+) +
+  geom_col(width = 0.75) +
+  scale_fill_manual(values = arg_type_colors, na.value = "gray70") +
+  facet_grid(. ~ sample_type1, scales = "free_x", space = "free_x") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+    panel.grid = element_blank(),
+    legend.position = "right"
+  ) +
+  labs(
+    x = "Sample",
+    y = "ARG absolute abundance",
+    fill = "ARG type"
+  ) +
+  guides(fill = guide_legend(ncol = 1))
+
+p_arg_type_stack_by_type1
+save(p_arg_type_stack_by_type1, file = file.path(output, "p_ARG_type_stack_by_type1.rda"))
+ggsave(file.path(output, "p_ARG_type_stack_by_type1.pdf"),
+       p_arg_type_stack_by_type1, width = 13, height = 5)
+
+
+# -----------------------------
+# sample 为 x 轴，按 type1 分面：Mechanism 绝对丰度
+# -----------------------------
+arg_mechanism_long_type1 <- arg_long_all %>%
+  mutate(
+    sample_type1 = coalesce(type1, type_sample, "Unknown"),
+    Mechanism.group = replace_na(Mechanism.group, "Others")
+  ) %>%
+  group_by(sample_type1, source, sample, Mechanism.group) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop")
+
+write_csv(arg_mechanism_long_type1, file.path(output, "ARG_mechanism_long_by_sample_and_type1.csv"))
+
+p_mech_stack_by_type1 <- ggplot(
+  arg_mechanism_long_type1,
+  aes(x = sample, y = value, fill = Mechanism.group)
+) +
+  geom_col(width = 0.75) +
+  scale_fill_manual(values = mech_colors, na.value = "gray70", drop = FALSE) +
+  facet_grid(. ~ sample_type1, scales = "free_x", space = "free_x") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+    panel.grid = element_blank(),
+    legend.position = "right"
+  ) +
+  labs(
+    x = "Sample",
+    y = "ARG absolute abundance",
+    fill = "Mechanism"
+  )
+
+p_mech_stack_by_type1
+save(p_mech_stack_by_type1, file = file.path(output, "p_ARG_mechanism_stack_by_type1.rda"))
+ggsave(file.path(output, "p_ARG_mechanism_stack_by_type1.pdf"),
+       p_mech_stack_by_type1, width = 13, height = 5)
+
+
+# -----------------------------
+# sample 为 x 轴，按 type1 分面：Rank 绝对丰度
+# -----------------------------
+arg_rank_long_type1 <- arg_long_all %>%
+  mutate(
+    sample_type1 = coalesce(type1, type_sample, "Unknown"),
+    Rank = replace_na(Rank, "Unknown")
+  ) %>%
+  group_by(sample_type1, source, sample, Rank) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop")
+
+write_csv(arg_rank_long_type1, file.path(output, "ARG_rank_long_by_sample_and_type1.csv"))
+
+p_rank_stack_by_type1 <- ggplot(
+  arg_rank_long_type1,
+  aes(x = sample, y = value, fill = Rank)
+) +
+  geom_col(width = 0.75) +
+  scale_fill_manual(values = rank_colors, na.value = "gray70", drop = FALSE) +
+  facet_grid(. ~ sample_type1, scales = "free_x", space = "free_x") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+    panel.grid = element_blank(),
+    legend.position = "right"
+  ) +
+  labs(
+    x = "Sample",
+    y = "ARG absolute abundance",
+    fill = "Risk rank"
+  )
+
+p_rank_stack_by_type1
+save(p_rank_stack_by_type1, file = file.path(output, "p_ARG_rank_stack_by_type1.rda"))
+ggsave(file.path(output, "p_ARG_rank_stack_by_type1.pdf"),
+       p_rank_stack_by_type1, width = 13, height = 5)
+
+
+# -----------------------------
+# ARG type：按样本 type 汇总绝对丰度
+# -----------------------------
+arg_type_by_type <- arg_long_all %>%
+  mutate(
+    sample_type = coalesce(type_sample, "Unknown"),
+    arg_type = replace_na(type, "others")
+  ) %>%
+  group_by(sample_type, arg_type) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop")
+
+write_csv(arg_type_by_type, file.path(output, "ARG_type_absolute_by_type.csv"))
+
+n_arg_type <- n_distinct(arg_type_by_type$arg_type)
+
+arg_type_colors <- c(
+  brewer.pal(12, "Paired"),
+  brewer.pal(8, "Dark2"),
+  brewer.pal(8, "Set2"),
+  brewer.pal(8, "Accent")
+)
+
+arg_type_colors <- rep(arg_type_colors, length.out = n_arg_type)
+names(arg_type_colors) <- unique(arg_type_by_type$arg_type)
+
+p_ARG_type_absolute_by_type <- ggplot(
+  arg_type_by_type,
+  aes(x = sample_type, y = value, fill = arg_type)
+) +
+  geom_col(position = "stack", width = 0.75) +
+  scale_fill_manual(values = arg_type_colors, na.value = "gray70") +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right"
+  ) +
+  labs(
+    x = "Sample type",
+    y = "ARG absolute abundance",
+    fill = "ARG type"
+  ) +
+  guides(fill = guide_legend(ncol = 1))
+
+p_ARG_type_absolute_by_type
+
+save(
+  p_ARG_type_absolute_by_type,
+  file = file.path(output, "p_ARG_type_absolute_by_type.rda")
+)
+
+ggsave(
+  file.path(output, "p_ARG_type_absolute_by_type.pdf"),
+  p_ARG_type_absolute_by_type,
+  width = 8,
+  height = 5
+)
+
+# -----------------------------
+# Mechanism：按样本 type 汇总绝对丰度
+# -----------------------------
+arg_mechanism_by_type <- arg_long_all %>%
+  mutate(
+    sample_type = coalesce(type_sample, "Unknown"),
+    Mechanism.group = replace_na(Mechanism.group, "Others")
+  ) %>%
+  group_by(sample_type, Mechanism.group) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop")
+
+write_csv(arg_mechanism_by_type, file.path(output, "ARG_mechanism_absolute_by_type.csv"))
+
+mech_levels <- c(
+  "Enzymatic inactivation",
+  "Antibiotic target alteration",
+  "Antibiotic target replacement",
+  "Efflux pump",
+  "Antibiotic target protection",
+  "Reduced permeability",
+  "Efflux pump RND family",
+  "Others"
+)
+
+arg_mechanism_by_type <- arg_mechanism_by_type %>%
+  mutate(
+    Mechanism.group = factor(Mechanism.group, levels = mech_levels)
+  )
+
+mech_colors <- c(
+  "#8DD3C7", "#FFFFB3", "#BEBADA", "#FB8072",
+  "#80B1D3", "#FDB462", "#B3DE69", "#D9D9D9"
+)
+
+names(mech_colors) <- mech_levels
+
+p_ARG_mechanism_absolute_by_type <- ggplot(
+  arg_mechanism_by_type,
+  aes(x = sample_type, y = value, fill = Mechanism.group)
+) +
+  geom_col(position = "stack", width = 0.75) +
+  scale_fill_manual(values = mech_colors, na.value = "gray70", drop = FALSE) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right"
+  ) +
+  labs(
+    x = "Sample type",
+    y = "ARG absolute abundance",
+    fill = "Mechanism"
+  )
+
+p_ARG_mechanism_absolute_by_type
+
+save(
+  p_ARG_mechanism_absolute_by_type,
+  file = file.path(output, "p_ARG_mechanism_absolute_by_type.rda")
+)
+
+ggsave(
+  file.path(output, "p_ARG_mechanism_absolute_by_type.pdf"),
+  p_ARG_mechanism_absolute_by_type,
+  width = 8,
+  height = 5
+)
+
+# -----------------------------
+# Rank：按样本 type 汇总绝对丰度
+# -----------------------------
+arg_rank_by_type <- arg_long_all %>%
+  mutate(
+    sample_type = coalesce(type_sample, "Unknown"),
+    Rank = replace_na(Rank, "Unknown")
+  ) %>%
+  group_by(sample_type, Rank) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop")
+
+write_csv(arg_rank_by_type, file.path(output, "ARG_rank_absolute_by_type.csv"))
+
+rank_colors <- c(
+  "I" = "#DD3497",
+  "II" = "#F768A1",
+  "III" = "#FA9FB5",
+  "IV" = "#FCC5C0",
+  "Unknown" = "gray70"
+)
+
+p_ARG_rank_absolute_by_type <- ggplot(
+  arg_rank_by_type,
+  aes(x = sample_type, y = value, fill = Rank)
+) +
+  geom_col(position = "stack", width = 0.75) +
+  scale_fill_manual(values = rank_colors, na.value = "gray70", drop = FALSE) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right"
+  ) +
+  labs(
+    x = "Sample type",
+    y = "ARG absolute abundance",
+    fill = "Risk rank"
+  )
+
+p_ARG_rank_absolute_by_type
+
+save(
+  p_ARG_rank_absolute_by_type,
+  file = file.path(output, "p_ARG_rank_absolute_by_type.rda")
+)
+
+ggsave(
+  file.path(output, "p_ARG_rank_absolute_by_type.pdf"),
+  p_ARG_rank_absolute_by_type,
+  width = 8,
+  height = 5
+)
+
+# -----------------------------
+# sample 为 x 轴，按样本 type 分面：ARG type 绝对丰度
+# -----------------------------
+arg_type_long_by_type <- arg_long_all %>%
+  mutate(
+    sample_type = coalesce(type_sample, "Unknown"),
+    arg_type = replace_na(type, "others")
+  ) %>%
+  group_by(sample_type, source, sample, arg_type) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop")
+
+write_csv(arg_type_long_by_type, file.path(output, "ARG_type_long_by_sample_and_type.csv"))
+
+p_ARG_type_stack_by_type <- ggplot(
+  arg_type_long_by_type,
+  aes(x = sample, y = value, fill = arg_type)
+) +
+  geom_col(width = 0.75) +
+  scale_fill_manual(values = arg_type_colors, na.value = "gray70") +
+  facet_grid(. ~ sample_type, scales = "free_x", space = "free_x") +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+    legend.position = "right"
+  ) +
+  labs(
+    x = "Sample",
+    y = "ARG absolute abundance",
+    fill = "ARG type"
+  ) +
+  guides(fill = guide_legend(ncol = 1))
+
+p_ARG_type_stack_by_type
+
+save(
+  p_ARG_type_stack_by_type,
+  file = file.path(output, "p_ARG_type_stack_by_type.rda")
+)
+
+ggsave(
+  file.path(output, "p_ARG_type_stack_by_type.pdf"),
+  p_ARG_type_stack_by_type,
+  width = 13,
+  height = 5
+)
+
+# -----------------------------
+# sample 为 x 轴，按样本 type 分面：Rank 绝对丰度
+# -----------------------------
+arg_rank_long_by_type <- arg_long_all %>%
+  mutate(
+    sample_type = coalesce(type_sample, "Unknown"),
+    Rank = replace_na(Rank, "Unknown")
+  ) %>%
+  group_by(sample_type, source, sample, Rank) %>%
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop")
+
+write_csv(arg_rank_long_by_type, file.path(output, "ARG_rank_long_by_sample_and_type.csv"))
+
+p_ARG_rank_stack_by_type <- ggplot(
+  arg_rank_long_by_type,
+  aes(x = sample, y = value, fill = Rank)
+) +
+  geom_col(width = 0.75) +
+  scale_fill_manual(values = rank_colors, na.value = "gray70", drop = FALSE) +
+  facet_grid(. ~ sample_type, scales = "free_x", space = "free_x") +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+    legend.position = "right"
+  ) +
+  labs(
+    x = "Sample",
+    y = "ARG absolute abundance",
+    fill = "Risk rank"
+  )
+
+p_ARG_rank_stack_by_type
+
+save(
+  p_ARG_rank_stack_by_type,
+  file = file.path(output, "p_ARG_rank_stack_by_type.rda")
+)
+
+ggsave(
+  file.path(output, "p_ARG_rank_stack_by_type.pdf"),
+  p_ARG_rank_stack_by_type,
+  width = 13,
+  height = 5
+)
