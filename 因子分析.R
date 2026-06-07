@@ -116,7 +116,7 @@ library(mlr)
 library(randomForest)
 library(e1071)
 
-outp <- "outp/factor_ARGs_total_ML"
+outp <- "outp/factor_ARGs_total_ML_0603"
 dir.create(outp, recursive = TRUE, showWarnings = FALSE)
 
 # ============================================================
@@ -2441,4 +2441,1005 @@ write.csv(
   arg_hel %>% rownames_to_column("sample"),
   file.path(outp, "01_ARG_hellinger_after_zero_filter.csv"),
   row.names = FALSE
+)
+
+
+
+202600607补充 gdp
+library(tidyverse)
+library(vegan)
+library(ggplot2)
+library(ggrepel)
+library(mlr)
+library(randomForest)
+library(e1071)
+
+outp <- "outp/factor_ARGs_profile_grouped_GDP"
+dir.create(outp, recursive = TRUE, showWarnings = FALSE)
+
+# ============================================================
+# 1. 读取 factors0527.csv
+# ============================================================
+
+factors <- read.csv(
+  "input/factors0527_lxc.csv",
+  header = TRUE,
+  sep = ",",
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+# ============================================================
+# 2. 因子分类
+# ============================================================
+
+environmental_vars <- c("As", "Hg", "P", "Cd", "Cr", "Pb", "N", "OM")
+
+geo_climate_num_vars <- c(
+  "Annual_average_temperature",
+  "Annual_precipitation",
+  "Annual_sunshine_hours",
+  "longitude",
+  "latitude"
+)
+
+geo_climate_cat_vars <- c("climate_type")
+
+economic_vars <- c(
+  "Green_area",
+  "Per_capita_regional_GDP",
+  "Total_population",
+  "GDP"
+)
+
+factor_group_map_all <- tibble(
+  factor = c(
+    environmental_vars,
+    geo_climate_num_vars,
+    geo_climate_cat_vars,
+    economic_vars
+  ),
+  original_factor = c(
+    environmental_vars,
+    "Annual average temperature",
+    "Annual precipitation",
+    "Annual sunshine hours",
+    "longitude",
+    "latitude",
+    "climate type",
+    "Green area",
+    "Per capita regional GDP",
+    "Total population",
+    "GDP"
+  ),
+  group = c(
+    rep("Environmental factors", length(environmental_vars)),
+    rep("Geo-climatic factors", length(geo_climate_num_vars)),
+    rep("Geo-climatic factors", length(geo_climate_cat_vars)),
+    rep("Economic factors", length(economic_vars))
+  )
+)
+
+# ============================================================
+# 3. 整理 factors
+# ============================================================
+
+factor_df <- factors %>%
+  mutate(across(everything(), ~na_if(as.character(.x), "/"))) %>%
+  rename(
+    climate_type = `climate type`,
+    Annual_average_temperature = `Annual average temperature`,
+    Annual_precipitation = `Annual precipitation`,
+    Annual_sunshine_hours = `Annual sunshine hours`,
+    Green_area = `Green area`,
+    Per_capita_regional_GDP = `Per capita regional GDP`,
+    Total_population = `Total population`
+  ) %>%
+  mutate(
+    climate_type = trimws(climate_type)
+  ) %>%
+  mutate(across(
+    all_of(c(environmental_vars, geo_climate_num_vars, economic_vars)),
+    as.numeric
+  )) %>%
+  mutate(
+    climate_type = replace_na(climate_type, "Unknown"),
+    climate_type = factor(climate_type),
+    ktype = factor(ktype)
+  ) %>%
+  column_to_rownames("sample")
+
+# ============================================================
+# 4. 整理 ARG subtype 矩阵，并剔除超过一半样本为 0 的 subtype
+# ============================================================
+
+sample_cols <- intersect(colnames(nor_cell_sub_anno), rownames(factor_df))
+
+arg_mat_raw <- nor_cell_sub_anno %>%
+  select(subtype, all_of(sample_cols)) %>%
+  group_by(subtype) %>%
+  summarise(across(everything(), ~sum(.x, na.rm = TRUE)), .groups = "drop") %>%
+  column_to_rownames("subtype") %>%
+  t() %>%
+  as.data.frame()
+
+arg_mat_raw[is.na(arg_mat_raw)] <- 0
+
+common_samples <- intersect(rownames(arg_mat_raw), rownames(factor_df))
+
+arg_mat_raw <- arg_mat_raw[common_samples, , drop = FALSE]
+factor_df <- factor_df[common_samples, , drop = FALSE]
+
+arg_zero_stat <- tibble(
+  subtype = colnames(arg_mat_raw),
+  n_sample = nrow(arg_mat_raw),
+  n_zero = colSums(arg_mat_raw == 0, na.rm = TRUE),
+  zero_ratio = n_zero / n_sample,
+  total_abundance = colSums(arg_mat_raw, na.rm = TRUE)
+) %>%
+  mutate(
+    keep = zero_ratio <= 0.9 & total_abundance > 0
+  ) %>%
+  arrange(desc(zero_ratio))
+
+write.csv(
+  arg_zero_stat,
+  file.path(outp, "01_ARG_subtype_zero_filter_summary.csv"),
+  row.names = FALSE
+)
+
+arg_mat <- arg_mat_raw[, arg_zero_stat$subtype[arg_zero_stat$keep], drop = FALSE]
+
+filter_summary <- data.frame(
+  raw_ARG_subtype_number = ncol(arg_mat_raw),
+  retained_ARG_subtype_number = ncol(arg_mat),
+  removed_ARG_subtype_number = ncol(arg_mat_raw) - ncol(arg_mat),
+  zero_filter_threshold = "remove subtype with zero_ratio > 0.5"
+)
+
+write.csv(
+  filter_summary,
+  file.path(outp, "01_ARG_zero_filter_number_summary.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  arg_mat %>% rownames_to_column("sample"),
+  file.path(outp, "01_ARG_matrix_after_zero_filter.csv"),
+  row.names = FALSE
+)
+
+print(filter_summary)
+
+# ============================================================
+# 5. ARGs 标准化
+# ============================================================
+
+arg_rel <- decostand(arg_mat, method = "total")
+arg_rel[is.na(arg_rel)] <- 0
+
+arg_hel <- decostand(arg_rel, method = "hellinger")
+arg_hel[is.na(arg_hel)] <- 0
+
+arg_bray <- vegdist(arg_rel, method = "bray")
+
+write.csv(
+  arg_rel %>% rownames_to_column("sample"),
+  file.path(outp, "01_ARG_relative_abundance_after_zero_filter.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  arg_hel %>% rownames_to_column("sample"),
+  file.path(outp, "01_ARG_hellinger_after_zero_filter.csv"),
+  row.names = FALSE
+)
+# ============================================================
+# 6. 整理数值型因子
+# ============================================================
+
+all_num_vars <- c(environmental_vars, geo_climate_num_vars, economic_vars)
+
+env_num_raw <- factor_df %>%
+  select(any_of(all_num_vars))
+
+num_keep <- names(which(colSums(!is.na(env_num_raw)) >= 0.7 * nrow(env_num_raw)))
+
+env_num <- env_num_raw[, num_keep, drop = FALSE]
+
+num_sd <- apply(env_num, 2, sd, na.rm = TRUE)
+num_keep <- names(num_sd[num_sd > 0])
+
+env_num <- env_num[, num_keep, drop = FALSE]
+
+for (i in colnames(env_num)) {
+  env_num[[i]][is.na(env_num[[i]])] <- median(env_num[[i]], na.rm = TRUE)
+}
+
+env_num_scale <- as.data.frame(scale(env_num))
+rownames(env_num_scale) <- rownames(env_num)
+
+geo_cat <- factor_df %>%
+  select(any_of(geo_climate_cat_vars))
+
+geo_cat$climate_type <- droplevels(factor(geo_cat$climate_type))
+
+if (n_distinct(geo_cat$climate_type) > 1) {
+  cat_keep <- "climate_type"
+} else {
+  cat_keep <- character(0)
+}
+
+model_df <- cbind(
+  env_num_scale,
+  geo_cat[, cat_keep, drop = FALSE]
+)
+
+rownames(model_df) <- rownames(factor_df)
+
+factor_group_map <- factor_group_map_all %>%
+  filter(factor %in% colnames(model_df))
+
+write.csv(
+  factor_group_map,
+  file.path(outp, "01_factor_group_map_used.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  model_df %>% rownames_to_column("sample"),
+  file.path(outp, "01_factor_matrix_scaled_used.csv"),
+  row.names = FALSE
+)
+# ============================================================
+# 7. 单因子 PERMANOVA
+# ============================================================
+
+permanova_single <- tibble()
+
+for (i in colnames(model_df)) {
+  
+  tmp_env <- model_df[, i, drop = FALSE]
+  colnames(tmp_env) <- "factor_value"
+  
+  if (is.numeric(tmp_env$factor_value)) {
+    valid_factor <- sd(tmp_env$factor_value, na.rm = TRUE) > 0
+  } else {
+    valid_factor <- n_distinct(tmp_env$factor_value) > 1
+  }
+  
+  if (valid_factor) {
+    
+    test <- adonis2(
+      arg_bray ~ factor_value,
+      data = tmp_env,
+      permutations = 999
+    )
+    
+    permanova_single <- bind_rows(
+      permanova_single,
+      data.frame(
+        factor = i,
+        R2 = test$R2[1],
+        F_value = test$F[1],
+        p_value = test$`Pr(>F)`[1]
+      )
+    )
+  }
+}
+
+permanova_single <- permanova_single %>%
+  left_join(factor_group_map, by = "factor") %>%
+  mutate(
+    p_adj = p.adjust(p_value, method = "BH"),
+    significance = case_when(
+      p_adj < 0.001 ~ "***",
+      p_adj < 0.01 ~ "**",
+      p_adj < 0.05 ~ "*",
+      p_adj < 0.1 ~ ".",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  arrange(p_adj)
+
+write.csv(
+  permanova_single,
+  file.path(outp, "02_single_factor_PERMANOVA_grouped.csv"),
+  row.names = FALSE
+)
+
+p_single <- permanova_single %>%
+  mutate(original_factor = factor(original_factor, levels = rev(original_factor))) %>%
+  ggplot(aes(x = original_factor, y = R2, fill = group)) +
+  geom_col(width = 0.75) +
+  geom_text(aes(label = significance), hjust = -0.2, size = 4) +
+  coord_flip() +
+  theme_bw() +
+  labs(
+    x = NULL,
+    y = "PERMANOVA R2",
+    fill = "Factor group",
+    title = "Single-factor effects on overall ARG composition"
+  )
+
+ggsave(
+  file.path(outp, "02_single_factor_PERMANOVA_grouped.pdf"),
+  p_single,
+  width = 7,
+  height = 5
+)
+# ============================================================
+# 8. 分组 PERMANOVA
+# ============================================================
+
+group_permanova <- tibble()
+
+env_data <- model_df[, intersect(environmental_vars, colnames(model_df)), drop = FALSE]
+
+if (ncol(env_data) > 0) {
+  
+  test_env <- adonis2(arg_bray ~ ., data = env_data, permutations = 999)
+  
+  group_permanova <- bind_rows(
+    group_permanova,
+    data.frame(
+      group = "Environmental factors",
+      n_factor = ncol(env_data),
+      R2 = test_env$R2[1],
+      F_value = test_env$F[1],
+      p_value = test_env$`Pr(>F)`[1]
+    )
+  )
+}
+
+geo_data <- model_df[, intersect(c(geo_climate_num_vars, geo_climate_cat_vars), colnames(model_df)), drop = FALSE]
+
+if (ncol(geo_data) > 0) {
+  
+  test_geo <- adonis2(arg_bray ~ ., data = geo_data, permutations = 999)
+  
+  group_permanova <- bind_rows(
+    group_permanova,
+    data.frame(
+      group = "Geo-climatic factors",
+      n_factor = ncol(geo_data),
+      R2 = test_geo$R2[1],
+      F_value = test_geo$F[1],
+      p_value = test_geo$`Pr(>F)`[1]
+    )
+  )
+}
+
+econ_data <- model_df[, intersect(economic_vars, colnames(model_df)), drop = FALSE]
+
+if (ncol(econ_data) > 0) {
+  
+  test_econ <- adonis2(arg_bray ~ ., data = econ_data, permutations = 999)
+  
+  group_permanova <- bind_rows(
+    group_permanova,
+    data.frame(
+      group = "Economic factors",
+      n_factor = ncol(econ_data),
+      R2 = test_econ$R2[1],
+      F_value = test_econ$F[1],
+      p_value = test_econ$`Pr(>F)`[1]
+    )
+  )
+}
+
+group_permanova <- group_permanova %>%
+  mutate(
+    p_adj = p.adjust(p_value, method = "BH"),
+    significance = case_when(
+      p_adj < 0.001 ~ "***",
+      p_adj < 0.01 ~ "**",
+      p_adj < 0.05 ~ "*",
+      p_adj < 0.1 ~ ".",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  arrange(desc(R2))
+
+write.csv(
+  group_permanova,
+  file.path(outp, "03_factor_group_PERMANOVA.csv"),
+  row.names = FALSE
+)
+
+p_group <- group_permanova %>%
+  mutate(group = factor(group, levels = rev(group))) %>%
+  ggplot(aes(x = group, y = R2, fill = group)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = significance), hjust = -0.2, size = 5) +
+  coord_flip() +
+  theme_bw() +
+  theme(legend.position = "none") +
+  labs(
+    x = NULL,
+    y = "PERMANOVA R2",
+    title = "Grouped effects on overall ARG composition"
+  )
+
+ggsave(
+  file.path(outp, "03_factor_group_PERMANOVA.pdf"),
+  p_group,
+  width = 6,
+  height = 4
+)
+# ============================================================
+# 9. db-RDA
+# ============================================================
+
+dbrda_full <- capscale(
+  arg_bray ~ .,
+  data = model_df
+)
+
+write.csv(
+  as.data.frame(anova.cca(dbrda_full, permutations = 999)),
+  file.path(outp, "04_dbRDA_overall_test.csv")
+)
+
+write.csv(
+  as.data.frame(anova.cca(dbrda_full, by = "term", permutations = 999)),
+  file.path(outp, "04_dbRDA_factor_test.csv")
+)
+
+site_score <- scores(dbrda_full, display = "sites") %>%
+  as.data.frame() %>%
+  rownames_to_column("sample") %>%
+  left_join(factor_df %>% rownames_to_column("sample"), by = "sample")
+
+env_score <- scores(dbrda_full, display = "bp") %>%
+  as.data.frame() %>%
+  rownames_to_column("factor") %>%
+  left_join(factor_group_map, by = "factor")
+
+dbrda_imp <- summary(dbrda_full)$cont$importance
+
+dbrda_exp1 <- ifelse(ncol(dbrda_imp) >= 1, dbrda_imp[2, 1] * 100, 0)
+dbrda_exp2 <- ifelse(ncol(dbrda_imp) >= 2, dbrda_imp[2, 2] * 100, 0)
+
+p_dbrda <- ggplot(site_score, aes(CAP1, CAP2, color = ktype)) +
+  geom_point(size = 3) +
+  stat_ellipse(aes(group = ktype), linetype = 2) +
+  geom_segment(
+    data = env_score,
+    aes(
+      x = 0,
+      y = 0,
+      xend = CAP1,
+      yend = CAP2,
+      linetype = group
+    ),
+    arrow = arrow(length = unit(0.25, "cm")),
+    inherit.aes = FALSE
+  ) +
+  geom_text_repel(
+    data = env_score,
+    aes(CAP1, CAP2, label = original_factor),
+    inherit.aes = FALSE,
+    size = 3
+  ) +
+  theme_bw() +
+  labs(
+    x = paste0("CAP1 (", round(dbrda_exp1, 2), "%)"),
+    y = paste0("CAP2 (", round(dbrda_exp2, 2), "%)"),
+    color = "ARG group",
+    linetype = "Factor group",
+    title = "db-RDA of overall ARG composition"
+  )
+
+ggsave(
+  file.path(outp, "04_dbRDA_ARG_profile_grouped_factors.pdf"),
+  p_dbrda,
+  width = 7,
+  height = 6
+)
+
+# ============================================================
+# 10. PCoA + envfit
+# ============================================================
+
+pcoa_arg <- cmdscale(arg_bray, eig = TRUE, k = 2)
+
+pcoa_site <- data.frame(
+  sample = rownames(arg_mat),
+  PCoA1 = pcoa_arg$points[, 1],
+  PCoA2 = pcoa_arg$points[, 2]
+) %>%
+  left_join(factor_df %>% rownames_to_column("sample"), by = "sample")
+
+envfit_res <- envfit(
+  pcoa_arg$points,
+  model_df,
+  permutations = 999
+)
+
+envfit_vec <- as.data.frame(scores(envfit_res, display = "vectors")) %>%
+  rownames_to_column("factor") %>%
+  mutate(
+    r2 = envfit_res$vectors$r,
+    p_value = envfit_res$vectors$pvals,
+    variable_type = "numeric"
+  )
+
+if (!is.null(envfit_res$factors)) {
+  
+  envfit_fac <- data.frame(
+    factor = names(envfit_res$factors$r),
+    r2 = as.numeric(envfit_res$factors$r),
+    p_value = as.numeric(envfit_res$factors$pvals),
+    variable_type = "categorical"
+  )
+  
+} else {
+  
+  envfit_fac <- tibble(
+    factor = character(),
+    r2 = numeric(),
+    p_value = numeric(),
+    variable_type = character()
+  )
+}
+
+envfit_df <- bind_rows(envfit_vec, envfit_fac) %>%
+  left_join(factor_group_map, by = "factor") %>%
+  mutate(
+    p_adj = p.adjust(p_value, method = "BH"),
+    significance = case_when(
+      p_adj < 0.001 ~ "***",
+      p_adj < 0.01 ~ "**",
+      p_adj < 0.05 ~ "*",
+      p_adj < 0.1 ~ ".",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  arrange(p_adj)
+
+write.csv(
+  envfit_df,
+  file.path(outp, "05_envfit_ARG_profile_grouped_factors.csv"),
+  row.names = FALSE
+)
+
+p_envfit <- envfit_df %>%
+  mutate(original_factor = factor(original_factor, levels = rev(original_factor))) %>%
+  ggplot(aes(x = original_factor, y = r2, fill = group)) +
+  geom_col(width = 0.75) +
+  geom_text(aes(label = significance), hjust = -0.2, size = 4) +
+  coord_flip() +
+  theme_bw() +
+  labs(
+    x = NULL,
+    y = "envfit r2",
+    fill = "Factor group",
+    title = "Environmental fitting for overall ARG composition"
+  )
+
+ggsave(
+  file.path(outp, "05_envfit_ARG_profile_grouped_factors.pdf"),
+  p_envfit,
+  width = 7,
+  height = 5
+)
+
+# ============================================================
+# 11. PCoA 图
+# ============================================================
+
+eig_value <- pcoa_arg$eig
+eig_percent <- eig_value / sum(eig_value[eig_value > 0]) * 100
+
+p_pcoa <- ggplot(pcoa_site, aes(PCoA1, PCoA2, color = ktype)) +
+  geom_point(size = 3) +
+  stat_ellipse(aes(group = ktype), linetype = 2) +
+  theme_bw() +
+  labs(
+    x = paste0("PCoA1 (", round(eig_percent[1], 2), "%)"),
+    y = paste0("PCoA2 (", round(eig_percent[2], 2), "%)"),
+    color = "ARG group",
+    title = "PCoA of overall ARG composition"
+  )
+
+ggsave(
+  file.path(outp, "06_PCoA_ARG_profile_ktype.pdf"),
+  p_pcoa,
+  width = 6,
+  height = 5
+)
+# ============================================================
+# 12. 计算筛选后 ARGs 总丰度
+# ============================================================
+
+arg_total <- data.frame(
+  sample = rownames(arg_mat),
+  total_ARG_abundance = rowSums(arg_mat, na.rm = TRUE)
+)
+
+min_pos <- min(arg_total$total_ARG_abundance[arg_total$total_ARG_abundance > 0], na.rm = TRUE)
+
+arg_total <- arg_total %>%
+  mutate(
+    log10_total_ARG_abundance = log10(total_ARG_abundance + min_pos / 2)
+  ) %>%
+  left_join(
+    factor_df %>% rownames_to_column("sample"),
+    by = "sample"
+  )
+
+write.csv(
+  arg_total,
+  file.path(outp, "07_total_ARG_abundance_after_zero_filter.csv"),
+  row.names = FALSE
+)
+
+# ============================================================
+# 13. 多个因子与 ARGs 丰度的线性拟合
+# ============================================================
+
+linear_factor_df <- factor_df %>%
+  select(any_of(all_num_vars))
+
+linear_fit_summary <- tibble()
+
+for (i in colnames(linear_factor_df)) {
+  
+  tmp <- data.frame(
+    sample = rownames(linear_factor_df),
+    ARG = arg_total$log10_total_ARG_abundance,
+    factor_value = linear_factor_df[[i]]
+  ) %>%
+    drop_na()
+  
+  if (nrow(tmp) >= 5 && sd(tmp$ARG) > 0 && sd(tmp$factor_value) > 0) {
+    
+    fit <- lm(ARG ~ factor_value, data = tmp)
+    fit_sum <- summary(fit)
+    
+    linear_fit_summary <- bind_rows(
+      linear_fit_summary,
+      data.frame(
+        factor = i,
+        n = nrow(tmp),
+        slope = coef(fit)[2],
+        intercept = coef(fit)[1],
+        R2 = fit_sum$r.squared,
+        adj_R2 = fit_sum$adj.r.squared,
+        F_value = fit_sum$fstatistic[1],
+        p_value = coef(fit_sum)[2, 4],
+        AIC = AIC(fit)
+      )
+    )
+  }
+}
+
+linear_fit_summary <- linear_fit_summary %>%
+  left_join(factor_group_map_all, by = "factor") %>%
+  mutate(
+    p_adj = p.adjust(p_value, method = "BH"),
+    significance = case_when(
+      p_adj < 0.001 ~ "***",
+      p_adj < 0.01 ~ "**",
+      p_adj < 0.05 ~ "*",
+      p_adj < 0.1 ~ ".",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  arrange(p_adj)
+
+write.csv(
+  linear_fit_summary,
+  file.path(outp, "08_linear_fit_ARG_abundance_vs_factors.csv"),
+  row.names = FALSE
+)
+
+# ============================================================
+# 14. 线性拟合 R2 排序图
+# ============================================================
+
+p_linear_r2 <- linear_fit_summary %>%
+  mutate(original_factor = factor(original_factor, levels = rev(original_factor))) %>%
+  ggplot(aes(x = original_factor, y = R2, fill = group)) +
+  geom_col(width = 0.75) +
+  geom_text(aes(label = significance), hjust = -0.2, size = 4) +
+  coord_flip() +
+  theme_bw() +
+  labs(
+    x = NULL,
+    y = "Linear model R2",
+    fill = "Factor group",
+    title = "Linear fitting between ARG abundance and factors"
+  )
+
+ggsave(
+  file.path(outp, "08_linear_fit_ARG_abundance_R2.pdf"),
+  p_linear_r2,
+  width = 7,
+  height = 5
+)
+
+# ============================================================
+# 15. 多因子线性拟合散点图
+# ============================================================
+
+linear_plot_data <- arg_total %>%
+  select(sample, ktype, log10_total_ARG_abundance) %>%
+  left_join(
+    factor_df %>%
+      rownames_to_column("sample") %>%
+      select(sample, any_of(all_num_vars)),
+    by = "sample"
+  ) %>%
+  pivot_longer(
+    cols = all_of(colnames(linear_factor_df)),
+    names_to = "factor",
+    values_to = "factor_value"
+  ) %>%
+  drop_na() %>%
+  left_join(factor_group_map_all, by = "factor")
+
+p_linear_all <- ggplot(
+  linear_plot_data,
+  aes(x = factor_value, y = log10_total_ARG_abundance)
+) +
+  geom_point(aes(color = ktype), size = 2.5, alpha = 0.85) +
+  geom_smooth(
+    method = "lm",
+    se = TRUE,
+    linewidth = 0.7,
+    color = "black"
+  ) +
+  facet_wrap(
+    ~ original_factor,
+    scales = "free_x",
+    ncol = 4
+  ) +
+  theme_bw() +
+  labs(
+    x = NULL,
+    y = "log10(total ARG abundance)",
+    color = "ARG group",
+    title = "Linear fitting between ARG abundance and multiple factors"
+  )
+
+ggsave(
+  file.path(outp, "09_linear_fit_ARG_abundance_multiple_factors.pdf"),
+  p_linear_all,
+  width = 12,
+  height = 10
+)
+# ============================================================
+# 16. 准备 ML 数据
+# ============================================================
+
+climate_dummy_ml <- model.matrix(~ climate_type, data = model_df)
+
+if (ncol(climate_dummy_ml) > 1) {
+  climate_dummy_ml <- climate_dummy_ml[, -1, drop = FALSE]
+} else {
+  climate_dummy_ml <- matrix(nrow = nrow(model_df), ncol = 0)
+}
+
+rownames(climate_dummy_ml) <- rownames(model_df)
+
+ml_X <- cbind(
+  model_df[, setdiff(colnames(model_df), "climate_type"), drop = FALSE],
+  climate_dummy_ml
+)
+
+ml_X <- as.data.frame(ml_X)
+
+ml_factor_map_num <- factor_group_map %>%
+  filter(factor != "climate_type") %>%
+  select(factor, original_factor, group)
+
+ml_factor_map_climate <- tibble(
+  factor = colnames(climate_dummy_ml),
+  original_factor = "climate type",
+  group = "Geo-climatic factors"
+)
+
+ml_factor_map <- bind_rows(
+  ml_factor_map_num,
+  ml_factor_map_climate
+) %>%
+  mutate(
+    mlr_factor = paste0("X", row_number())
+  )
+
+colnames(ml_X) <- ml_factor_map$mlr_factor
+
+ml_data <- data.frame(
+  sample = rownames(arg_mat),
+  PCoA1 = pcoa_arg$points[, 1],
+  PCoA2 = pcoa_arg$points[, 2],
+  ml_X,
+  check.names = FALSE
+)
+
+write.csv(
+  ml_factor_map,
+  file.path(outp, "10_mlr_factor_group_map.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  ml_data,
+  file.path(outp, "10_mlr_input_ARG_profile_PCoA.csv"),
+  row.names = FALSE
+)
+
+# ============================================================
+# 17. RF + SVM permutation importance
+# ============================================================
+
+rf_lrn <- makeLearner(
+  "regr.randomForest",
+  ntree = 1000,
+  importance = TRUE
+)
+
+svm_lrn <- makeLearner(
+  "regr.svm",
+  kernel = "radial",
+  cost = 1,
+  gamma = 1 / length(ml_factor_map$mlr_factor),
+  scale = TRUE
+)
+
+ml_importance_raw <- tibble()
+
+n_perm <- 100
+
+for (target_now in c("PCoA1", "PCoA2")) {
+  
+  task_data <- ml_data %>%
+    select(all_of(target_now), all_of(ml_factor_map$mlr_factor))
+  
+  task_now <- makeRegrTask(
+    id = paste0("ARG_profile_", target_now),
+    data = task_data,
+    target = target_now
+  )
+  
+  set.seed(123)
+  rf_model <- train(rf_lrn, task_now)
+  
+  set.seed(123)
+  svm_model <- train(svm_lrn, task_now)
+  
+  for (model_now in c("RF", "SVM")) {
+    
+    if (model_now == "RF") {
+      trained_model <- rf_model
+    } else {
+      trained_model <- svm_model
+    }
+    
+    base_pred <- predict(trained_model, task = task_now)
+    base_rmse <- performance(base_pred, measures = rmse)
+    
+    for (j in ml_factor_map$mlr_factor) {
+      
+      perm_values <- c()
+      
+      for (k in 1:n_perm) {
+        
+        tmp_data <- task_data
+        tmp_data[[j]] <- sample(tmp_data[[j]])
+        
+        tmp_task <- makeRegrTask(
+          id = paste0("tmp_", model_now, "_", target_now),
+          data = tmp_data,
+          target = target_now
+        )
+        
+        tmp_pred <- predict(trained_model, task = tmp_task)
+        tmp_rmse <- performance(tmp_pred, measures = rmse)
+        
+        perm_values <- c(perm_values, tmp_rmse - base_rmse)
+      }
+      
+      ml_importance_raw <- bind_rows(
+        ml_importance_raw,
+        data.frame(
+          target = target_now,
+          model = model_now,
+          mlr_factor = j,
+          importance_mean = mean(perm_values),
+          importance_sd = sd(perm_values),
+          positive_rate = mean(perm_values > 0)
+        )
+      )
+    }
+  }
+}
+
+write.csv(
+  ml_importance_raw,
+  file.path(outp, "11_RF_SVM_raw_permutation_importance_ARG_profile.csv"),
+  row.names = FALSE
+)
+
+ml_importance_factor <- ml_importance_raw %>%
+  left_join(ml_factor_map, by = "mlr_factor") %>%
+  group_by(target, model, original_factor, group) %>%
+  summarise(
+    importance_mean = sum(importance_mean, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+ml_importance_integrated <- ml_importance_factor %>%
+  group_by(original_factor, group) %>%
+  summarise(
+    mean_importance = mean(importance_mean, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    rank_importance = rank(-mean_importance, ties.method = "average")
+  ) %>%
+  arrange(rank_importance)
+
+write.csv(
+  ml_importance_integrated,
+  file.path(outp, "12_RF_SVM_integrated_importance_by_factor.csv"),
+  row.names = FALSE
+)
+
+p_ml_factor <- ml_importance_integrated %>%
+  mutate(original_factor = factor(original_factor, levels = rev(original_factor))) %>%
+  ggplot(aes(x = original_factor, y = mean_importance, fill = group)) +
+  geom_col(width = 0.75) +
+  coord_flip() +
+  theme_bw() +
+  labs(
+    x = NULL,
+    y = "Mean increase in RMSE after permutation",
+    fill = "Factor group",
+    title = "RF and SVM importance for overall ARG composition"
+  )
+
+ggsave(
+  file.path(outp, "12_RF_SVM_integrated_importance_by_factor.pdf"),
+  p_ml_factor,
+  width = 7,
+  height = 5
+)
+
+ml_importance_group <- ml_importance_integrated %>%
+  group_by(group) %>%
+  summarise(
+    total_importance = sum(mean_importance, na.rm = TRUE),
+    mean_importance = mean(mean_importance, na.rm = TRUE),
+    n_factor = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(total_importance))
+
+write.csv(
+  ml_importance_group,
+  file.path(outp, "13_RF_SVM_integrated_importance_by_group.csv"),
+  row.names = FALSE
+)
+
+p_ml_group <- ml_importance_group %>%
+  mutate(group = factor(group, levels = rev(group))) %>%
+  ggplot(aes(x = group, y = total_importance, fill = group)) +
+  geom_col(width = 0.7) +
+  coord_flip() +
+  theme_bw() +
+  theme(legend.position = "none") +
+  labs(
+    x = NULL,
+    y = "Total importance",
+    title = "Grouped RF and SVM importance for overall ARG composition"
+  )
+
+ggsave(
+  file.path(outp, "13_RF_SVM_integrated_importance_by_group.pdf"),
+  p_ml_group,
+  width = 6,
+  height = 4
 )

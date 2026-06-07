@@ -162,4 +162,13 @@ othersam5 = bind_rows(
   sam %>%
     select(-ktype)
 )
+othersam5 <- othersam5 %>%
+  mutate(
+    type1 = str_trim(type1),
+    type1 = if_else(
+      type1 == "Constructed Wetland rhizosphere",
+      "Constructed wetlands rhizosphere",
+      type1
+    )
+  )
 save(othersam5,file = "input/othersam5.rda")
