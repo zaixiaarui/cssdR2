@@ -48,7 +48,8 @@ SARG_RANK=SARG_DIA%>%left_join(ARGRANK_DB,by=c("sseqid"="ARG"))
 contig_taxid_tax_arg=contig_taxid_tax%>%
   full_join(.,SARG_RANK,by=c("Name"="qseqid"))
 
-#write.csv(contig_taxid_tax_abun_arg,file.path(output,"SARG_host.csv"))
+save(contig_taxid_tax_arg, 
+     file = "output/contig_taxid_tax_arg.rda")
 
 sam <- read_csv(
   file.path(input, "sample.csv"),

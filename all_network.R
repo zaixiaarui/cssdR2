@@ -3613,3 +3613,954 @@ ggsave(
   height = 8,
   dpi = 300
 )
+
+
+#提取根际病原菌是否为ARGs宿主
+
+# ============================================================
+# 1. 提取 Urban wetlands rhizosphere 富集的病原菌
+# ============================================================
+
+library(tidyverse)
+
+output_patho_arg <- file.path(output, "pathogen_ARG_host_contig")
+dir.create(output_patho_arg, recursive = TRUE, showWarnings = FALSE)
+
+# -----------------------------
+# 1.1 提取 microeco LEfSe 结果
+# -----------------------------
+
+# ============================================================
+# 1. 重新提取城市湿地根际富集病原菌
+# 正确拆分 microeco LEfSe 的 Taxa 字段
+# ============================================================
+
+library(tidyverse)
+
+output_patho_arg <- file.path(output, "pathogen_ARG_host_contig")
+dir.create(output_patho_arg, recursive = TRUE, showWarnings = FALSE)
+
+lefse_res <- lefse_pathogen_type1$res_diff %>%
+  as.data.frame()
+
+# 去掉复杂 rownames，避免 head() 显示混乱
+rownames(lefse_res) <- NULL
+
+write_csv(
+  lefse_res,
+  file.path(output_patho_arg, "microeco_lefse_pathogen_type1_res_diff.csv")
+)
+
+# 查看列名
+print(colnames(lefse_res))
+
+# 正确拆分 Taxa:
+# Bacteria|Pseudomonadota|...|Pseudomonas|Pseudomonas aeruginosa
+rhizo_enriched_pathogen <- lefse_res %>%
+  filter(Group == "Urban wetlands rhizosphere") %>%
+  mutate(
+    Taxa = as.character(Taxa)
+  ) %>%
+  separate(
+    Taxa,
+    into = c(
+      "Kingdom_lefse",
+      "Phylum_lefse",
+      "Class_lefse",
+      "Order_lefse",
+      "Family_lefse",
+      "Genus_lefse",
+      "Species_lefse"
+    ),
+    sep = "\\|",
+    remove = FALSE,
+    fill = "right",
+    extra = "merge"
+  ) %>%
+  mutate(
+    pathogen_species = Species_lefse,
+    pathogen_genus = Genus_lefse,
+    
+    pathogen_species_clean = pathogen_species %>%
+      str_replace_all("^s__", "") %>%
+      str_replace_all("_", " ") %>%
+      str_squish() %>%
+      str_to_lower(),
+    
+    pathogen_genus_clean = pathogen_genus %>%
+      str_replace_all("^g__", "") %>%
+      str_replace_all("_", " ") %>%
+      str_squish() %>%
+      str_to_lower()
+  ) %>%
+  arrange(desc(LDA))
+
+write_csv(
+  rhizo_enriched_pathogen,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_LEfSe_split.csv")
+)
+
+cat("城市湿地根际富集病原菌数量：", nrow(rhizo_enriched_pathogen), "\n")
+
+rhizo_enriched_pathogen %>%
+  dplyr::select(
+    pathogen_species,
+    pathogen_genus,
+    Group,
+    LDA,
+    P.unadj,
+    P.adj,
+    Significance
+  ) %>%
+  head()
+
+# -----------------------------
+# 1.2 只保留城市湿地根际富集 marker
+# -----------------------------
+
+rhizo_enriched_pathogen <- lefse_res %>%
+  filter(Group == "Urban wetlands rhizosphere") %>%
+  mutate(
+    pathogen_species = Taxa %>%
+      as.character() %>%
+      str_replace_all("^s__", "") %>%
+      str_replace_all(".*\\|s__", "") %>%
+      str_replace_all("_", " ") %>%
+      str_squish(),
+    pathogen_species_clean = pathogen_species %>%
+      str_to_lower()
+  ) %>%
+  arrange(desc(LDA))
+
+write_csv(
+  rhizo_enriched_pathogen,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_LEfSe.csv")
+)
+
+cat("城市湿地根际富集病原菌数量：", nrow(rhizo_enriched_pathogen), "\n")
+print(rhizo_enriched_pathogen[, c("Taxa", "Group", "LDA", "pathogen_species")])
+
+# ============================================================
+# 2. 整理 contig_taxid_tax_arg
+# ============================================================
+load("output/contig_taxid_tax_arg.rda")
+head(contig_taxid_tax_arg)
+# ============================================================
+# 2. 整理 contig_taxid_tax_arg
+# ============================================================
+
+contig_arg_host <- contig_taxid_tax_arg %>%
+  mutate(
+    Name = as.character(Name),
+    taxid = as.character(taxid),
+    Kingdom = as.character(Kingdom),
+    Phylum = as.character(Phylum),
+    Class = as.character(Class),
+    Order = as.character(Order),
+    Family = as.character(Family),
+    Genus = as.character(Genus),
+    Species = as.character(Species),
+    Type = as.character(Type),
+    Subtype = as.character(Subtype),
+    HMM.category = as.character(HMM.category),
+    Mechanism.group = as.character(Mechanism.group),
+    Mechanism.subgroup = as.character(Mechanism.subgroup),
+    Rank = as.character(Rank),
+    
+    Species_clean = Species %>%
+      str_replace_all("^s__", "") %>%
+      str_replace_all("_", " ") %>%
+      str_squish() %>%
+      str_to_lower(),
+    
+    Genus_clean = Genus %>%
+      str_replace_all("^g__", "") %>%
+      str_replace_all("_", " ") %>%
+      str_squish() %>%
+      str_to_lower(),
+    
+    has_ARG = if_else(
+      !is.na(Subtype) &
+        Subtype != "" &
+        Subtype != "NA" &
+        !is.na(Type) &
+        Type != "" &
+        Type != "NA",
+      TRUE,
+      FALSE
+    )
+  )
+
+write_csv(
+  contig_arg_host,
+  file.path(output_patho_arg, "contig_ARG_host_taxonomy_clean.csv")
+)
+
+write_csv(
+  contig_arg_host,
+  file.path(output_patho_arg, "contig_ARG_host_taxonomy_clean.csv")
+)
+
+# ============================================================
+# 3. Species 水平匹配：
+# 城市湿地根际富集病原菌是否携带 ARGs
+# ============================================================
+
+rhizo_pathogen_arg_contig <- contig_arg_host %>%
+  inner_join(
+    rhizo_enriched_pathogen %>%
+      dplyr::select(
+        pathogen_species,
+        pathogen_genus,
+        pathogen_species_clean,
+        pathogen_genus_clean,
+        Group,
+        LDA,
+        P.unadj,
+        P.adj,
+        Significance
+      ),
+    by = c("Species_clean" = "pathogen_species_clean")
+  )
+
+write_csv(
+  rhizo_pathogen_arg_contig,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_matched_contigs_species_level_all.csv")
+)
+
+rhizo_pathogen_arg_contig_ARG <- rhizo_pathogen_arg_contig %>%
+  filter(has_ARG)
+
+write_csv(
+  rhizo_pathogen_arg_contig_ARG,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_contigs_species_level.csv")
+)
+
+cat("Species 水平匹配到根际富集病原菌的 contig 数：",
+    n_distinct(rhizo_pathogen_arg_contig$Name), "\n")
+
+cat("Species 水平匹配到携带 ARG 的 contig 数：",
+    n_distinct(rhizo_pathogen_arg_contig_ARG$Name), "\n")
+# ============================================================
+# 4. 检查未匹配到 contig 的根际富集病原菌
+# ============================================================
+
+# rhizo_pathogen_arg_contig 中连接列叫 Species_clean
+matched_species <- rhizo_pathogen_arg_contig %>%
+  distinct(Species_clean) %>%
+  pull(Species_clean)
+
+rhizo_enriched_pathogen_match_check <- rhizo_enriched_pathogen %>%
+  mutate(
+    matched_to_contig_species = pathogen_species_clean %in% matched_species
+  ) %>%
+  dplyr::select(
+    pathogen_species,
+    pathogen_genus,
+    Group,
+    LDA,
+    P.adj,
+    matched_to_contig_species
+  )
+
+write_csv(
+  rhizo_enriched_pathogen_match_check,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_match_check_species_level.csv")
+)
+
+print(rhizo_enriched_pathogen_match_check)
+
+cat("LEfSe 根际富集病原菌中成功匹配到 contig 的物种数：",
+    sum(rhizo_enriched_pathogen_match_check$matched_to_contig_species), "\n")
+
+cat("LEfSe 根际富集病原菌总数：",
+    nrow(rhizo_enriched_pathogen_match_check), "\n")
+
+cat("Species 水平匹配比例：",
+    round(
+      sum(rhizo_enriched_pathogen_match_check$matched_to_contig_species) /
+        nrow(rhizo_enriched_pathogen_match_check) * 100,
+      2
+    ),
+    "%\n"
+)
+# ============================================================
+# 5. 根际富集病原菌 ARG 携带情况：species 水平
+# ============================================================
+
+rhizo_pathogen_species_ARG_summary <- rhizo_pathogen_arg_contig %>%
+  group_by(
+    pathogen_species,
+    pathogen_genus,
+    Species,
+    Genus,
+    Phylum,
+    LDA,
+    P.adj,
+    Significance
+  ) %>%
+  summarise(
+    n_contig = n_distinct(Name),
+    n_ARG_contig = n_distinct(Name[has_ARG]),
+    has_any_ARG = any(has_ARG),
+    n_ARG_type = n_distinct(Type[has_ARG], na.rm = TRUE),
+    n_ARG_subtype = n_distinct(Subtype[has_ARG], na.rm = TRUE),
+    ARG_types = paste(sort(unique(Type[has_ARG])), collapse = "; "),
+    ARG_subtypes = paste(sort(unique(Subtype[has_ARG])), collapse = "; "),
+    ARG_ranks = paste(sort(unique(Rank[has_ARG])), collapse = "; "),
+    ARG_mechanisms = paste(sort(unique(Mechanism.group[has_ARG])), collapse = "; "),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(has_any_ARG), desc(n_ARG_contig), desc(LDA))
+
+write_csv(
+  rhizo_pathogen_species_ARG_summary,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_summary_by_species_corrected.csv")
+)
+
+print(rhizo_pathogen_species_ARG_summary)
+# ============================================================
+# 6. ARG 携带比例
+# ============================================================
+
+rhizo_pathogen_ARG_rate_species <- rhizo_pathogen_species_ARG_summary %>%
+  summarise(
+    n_rhizo_enriched_pathogen_species_matched_contig = n(),
+    n_species_carrying_ARG = sum(has_any_ARG),
+    ARG_carrying_species_percent = n_species_carrying_ARG /
+      n_rhizo_enriched_pathogen_species_matched_contig * 100
+  )
+
+write_csv(
+  rhizo_pathogen_ARG_rate_species,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_carrying_rate_species_level_corrected.csv")
+)
+
+print(rhizo_pathogen_ARG_rate_species)
+
+rhizo_pathogen_ARG_rate_contig <- rhizo_pathogen_arg_contig %>%
+  summarise(
+    n_pathogen_contigs = n_distinct(Name),
+    n_ARG_carrying_pathogen_contigs = n_distinct(Name[has_ARG]),
+    ARG_carrying_contig_percent = n_ARG_carrying_pathogen_contigs /
+      n_pathogen_contigs * 100
+  )
+
+write_csv(
+  rhizo_pathogen_ARG_rate_contig,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_carrying_rate_contig_level_corrected.csv")
+)
+
+print(rhizo_pathogen_ARG_rate_contig)
+# ============================================================
+# 7. 重新绘制：
+# 根际富集病原菌携带 ARG contig 数
+# ============================================================
+
+p_pathogen_ARG_species <- rhizo_pathogen_species_ARG_summary %>%
+  mutate(
+    pathogen_species = factor(
+      pathogen_species,
+      levels = pathogen_species[order(n_ARG_contig)]
+    )
+  ) %>%
+  ggplot(
+    aes(
+      x = n_ARG_contig,
+      y = pathogen_species,
+      fill = has_any_ARG
+    )
+  ) +
+  geom_col(width = 0.75) +
+  scale_fill_manual(
+    values = c("TRUE" = "#E64B35", "FALSE" = "grey80")
+  ) +
+  labs(
+    x = "Number of ARG-carrying contigs",
+    y = "",
+    fill = "Carrying ARG"
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.y = element_text(face = "italic", size = 9),
+    legend.position = "top"
+  )
+
+ggsave(
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_contig_number_by_species_corrected.pdf"),
+  p_pathogen_ARG_species,
+  width = 7,
+  height = 6,
+  device = cairo_pdf
+)
+
+ggsave(
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_contig_number_by_species_corrected.png"),
+  p_pathogen_ARG_species,
+  width = 7,
+  height = 6,
+  dpi = 300
+)
+# ============================================================
+# 8. Genus 水平辅助匹配
+# 仅作为补充分析
+# ============================================================
+
+rhizo_pathogen_arg_contig_genus <- contig_arg_host %>%
+  inner_join(
+    rhizo_enriched_pathogen %>%
+      dplyr::select(
+        pathogen_species,
+        pathogen_genus,
+        pathogen_genus_clean,
+        Group,
+        LDA,
+        P.adj,
+        Significance
+      ),
+    by = c("Genus_clean" = "pathogen_genus_clean")
+  )
+
+write_csv(
+  rhizo_pathogen_arg_contig_genus,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_matched_contigs_genus_level_all.csv")
+)
+
+rhizo_pathogen_arg_contig_genus_ARG <- rhizo_pathogen_arg_contig_genus %>%
+  filter(has_ARG)
+
+write_csv(
+  rhizo_pathogen_arg_contig_genus_ARG,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_contigs_genus_level.csv")
+)
+
+rhizo_pathogen_ARG_genus_summary <- rhizo_pathogen_arg_contig_genus %>%
+  group_by(
+    pathogen_genus,
+    Genus,
+    Phylum
+  ) %>%
+  summarise(
+    n_contig = n_distinct(Name),
+    n_ARG_contig = n_distinct(Name[has_ARG]),
+    has_any_ARG = any(has_ARG),
+    n_ARG_type = n_distinct(Type[has_ARG], na.rm = TRUE),
+    n_ARG_subtype = n_distinct(Subtype[has_ARG], na.rm = TRUE),
+    ARG_types = paste(sort(unique(Type[has_ARG])), collapse = "; "),
+    ARG_subtypes = paste(sort(unique(Subtype[has_ARG])), collapse = "; "),
+    ARG_ranks = paste(sort(unique(Rank[has_ARG])), collapse = "; "),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(has_any_ARG), desc(n_ARG_contig))
+
+write_csv(
+  rhizo_pathogen_ARG_genus_summary,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_summary_genus_level.csv")
+)
+
+print(rhizo_pathogen_ARG_genus_summary)
+
+# ============================================================
+# 9. 城市湿地根际富集病原菌携带 ARGs 的 Type / Mechanism / Rank
+# ============================================================
+
+library(tidyverse)
+library(ggplot2)
+library(patchwork)
+library(ComplexHeatmap)
+library(circlize)
+
+output_patho_arg <- file.path(output, "pathogen_ARG_host_contig")
+dir.create(output_patho_arg, recursive = TRUE, showWarnings = FALSE)
+
+# -----------------------------
+# 9.1 整理 ARG-carrying contigs
+# -----------------------------
+
+rhizo_ARG_use <- rhizo_pathogen_arg_contig_ARG %>%
+  mutate(
+    pathogen_species = as.character(pathogen_species),
+    Name = as.character(Name),
+    Type = as.character(Type),
+    Subtype = as.character(Subtype),
+    Mechanism.group = as.character(Mechanism.group),
+    Mechanism.subgroup = as.character(Mechanism.subgroup),
+    Mechanism.subgroup2 = as.character(Mechanism.subgroup2),
+    Rank = as.character(Rank)
+  ) %>%
+  mutate(
+    Type = na_if(Type, "NA"),
+    Subtype = na_if(Subtype, "NA"),
+    Mechanism.group = na_if(Mechanism.group, "NA"),
+    Mechanism.subgroup = na_if(Mechanism.subgroup, "NA"),
+    Mechanism.subgroup2 = na_if(Mechanism.subgroup2, "NA"),
+    Rank = na_if(Rank, "NA")
+  ) %>%
+  mutate(
+    Type = replace_na(Type, "Unassigned"),
+    Subtype = replace_na(Subtype, "Unassigned"),
+    Mechanism.group = replace_na(Mechanism.group, "Unassigned"),
+    Mechanism.subgroup = replace_na(Mechanism.subgroup, "Unassigned"),
+    Mechanism.subgroup2 = replace_na(Mechanism.subgroup2, "Unassigned"),
+    Rank = replace_na(Rank, "Unassigned")
+  )
+
+write_csv(
+  rhizo_ARG_use,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_contigs_clean_for_type_mechanism_rank.csv")
+)
+
+cat("ARG-carrying contig records:", nrow(rhizo_ARG_use), "\n")
+cat("ARG-carrying contigs:", n_distinct(rhizo_ARG_use$Name), "\n")
+cat("ARG-carrying pathogen species:", n_distinct(rhizo_ARG_use$pathogen_species), "\n")
+cat("ARG types:", n_distinct(rhizo_ARG_use$Type), "\n")
+cat("ARG subtypes:", n_distinct(rhizo_ARG_use$Subtype), "\n")
+
+# ============================================================
+# 9.2 ARG Type summary
+# ============================================================
+
+rhizo_ARG_type_summary <- rhizo_ARG_use %>%
+  group_by(Type) %>%
+  summarise(
+    n_ARG_hits = n(),
+    n_ARG_contig = n_distinct(Name),
+    n_pathogen_species = n_distinct(pathogen_species),
+    n_ARG_subtype = n_distinct(Subtype),
+    pathogen_species = paste(sort(unique(pathogen_species)), collapse = "; "),
+    ARG_subtypes = paste(sort(unique(Subtype)), collapse = "; "),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_ARG_contig), desc(n_ARG_hits))
+
+write_csv(
+  rhizo_ARG_type_summary,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_type_summary.csv")
+)
+
+print(rhizo_ARG_type_summary)
+
+p_ARG_type <- rhizo_ARG_type_summary %>%
+  mutate(
+    Type = factor(Type, levels = Type[order(n_ARG_contig)])
+  ) %>%
+  ggplot(aes(x = n_ARG_contig, y = Type)) +
+  geom_col(width = 0.75, fill = "#3C5488") +
+  labs(
+    x = "Number of ARG-carrying contigs",
+    y = "ARG type"
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank()
+  )
+
+ggsave(
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_type_summary.pdf"),
+  p_ARG_type,
+  width = 6,
+  height = 5,
+  device = cairo_pdf
+)
+
+ggsave(
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_type_summary.png"),
+  p_ARG_type,
+  width = 6,
+  height = 5,
+  dpi = 300
+)
+# ============================================================
+# 9.3 ARG Subtype summary
+# ============================================================
+
+rhizo_ARG_subtype_summary <- rhizo_ARG_use %>%
+  group_by(Type, Subtype) %>%
+  summarise(
+    n_ARG_hits = n(),
+    n_ARG_contig = n_distinct(Name),
+    n_pathogen_species = n_distinct(pathogen_species),
+    pathogen_species = paste(sort(unique(pathogen_species)), collapse = "; "),
+    Rank = paste(sort(unique(Rank)), collapse = "; "),
+    Mechanism.group = paste(sort(unique(Mechanism.group)), collapse = "; "),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_ARG_contig), desc(n_ARG_hits))
+
+write_csv(
+  rhizo_ARG_subtype_summary,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_subtype_summary.csv")
+)
+
+print(head(rhizo_ARG_subtype_summary, 20))
+
+p_ARG_subtype_top20 <- rhizo_ARG_subtype_summary %>%
+  slice_head(n = 20) %>%
+  mutate(
+    Subtype = factor(Subtype, levels = Subtype[order(n_ARG_contig)])
+  ) %>%
+  ggplot(aes(x = n_ARG_contig, y = Subtype, fill = Type)) +
+  geom_col(width = 0.75) +
+  labs(
+    x = "Number of ARG-carrying contigs",
+    y = "ARG subtype",
+    fill = "ARG type"
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.y = element_text(size = 8)
+  )
+
+ggsave(
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_subtype_top20.pdf"),
+  p_ARG_subtype_top20,
+  width = 7,
+  height = 6,
+  device = cairo_pdf
+)
+
+ggsave(
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_subtype_top20.png"),
+  p_ARG_subtype_top20,
+  width = 7,
+  height = 6,
+  dpi = 300
+)
+# ============================================================
+# 9.4 ARG Mechanism summary
+# ============================================================
+
+rhizo_ARG_mechanism_group_summary <- rhizo_ARG_use %>%
+  group_by(Mechanism.group) %>%
+  summarise(
+    n_ARG_hits = n(),
+    n_ARG_contig = n_distinct(Name),
+    n_pathogen_species = n_distinct(pathogen_species),
+    n_ARG_type = n_distinct(Type),
+    n_ARG_subtype = n_distinct(Subtype),
+    ARG_types = paste(sort(unique(Type)), collapse = "; "),
+    ARG_subtypes = paste(sort(unique(Subtype)), collapse = "; "),
+    pathogen_species = paste(sort(unique(pathogen_species)), collapse = "; "),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_ARG_contig), desc(n_ARG_hits))
+
+write_csv(
+  rhizo_ARG_mechanism_group_summary,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_mechanism_group_summary.csv")
+)
+
+print(rhizo_ARG_mechanism_group_summary)
+
+p_ARG_mechanism <- rhizo_ARG_mechanism_group_summary %>%
+  mutate(
+    Mechanism.group = factor(
+      Mechanism.group,
+      levels = Mechanism.group[order(n_ARG_contig)]
+    )
+  ) %>%
+  ggplot(aes(x = n_ARG_contig, y = Mechanism.group)) +
+  geom_col(width = 0.75, fill = "#00A087") +
+  labs(
+    x = "Number of ARG-carrying contigs",
+    y = "ARG mechanism"
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank()
+  )
+
+ggsave(
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_mechanism_group_summary.pdf"),
+  p_ARG_mechanism,
+  width = 6.5,
+  height = 5,
+  device = cairo_pdf
+)
+
+ggsave(
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_mechanism_group_summary.png"),
+  p_ARG_mechanism,
+  width = 6.5,
+  height = 5,
+  dpi = 300
+)
+
+# Mechanism subgroup
+rhizo_ARG_mechanism_subgroup_summary <- rhizo_ARG_use %>%
+  group_by(Mechanism.group, Mechanism.subgroup) %>%
+  summarise(
+    n_ARG_hits = n(),
+    n_ARG_contig = n_distinct(Name),
+    n_pathogen_species = n_distinct(pathogen_species),
+    n_ARG_type = n_distinct(Type),
+    n_ARG_subtype = n_distinct(Subtype),
+    ARG_types = paste(sort(unique(Type)), collapse = "; "),
+    ARG_subtypes = paste(sort(unique(Subtype)), collapse = "; "),
+    pathogen_species = paste(sort(unique(pathogen_species)), collapse = "; "),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_ARG_contig), desc(n_ARG_hits))
+
+write_csv(
+  rhizo_ARG_mechanism_subgroup_summary,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_mechanism_subgroup_summary.csv")
+)
+
+print(rhizo_ARG_mechanism_subgroup_summary)
+# ============================================================
+# 9.5 ARG Rank summary
+# ============================================================
+
+rhizo_ARG_rank_summary <- rhizo_ARG_use %>%
+  group_by(Rank) %>%
+  summarise(
+    n_ARG_hits = n(),
+    n_ARG_contig = n_distinct(Name),
+    n_pathogen_species = n_distinct(pathogen_species),
+    n_ARG_type = n_distinct(Type),
+    n_ARG_subtype = n_distinct(Subtype),
+    ARG_types = paste(sort(unique(Type)), collapse = "; "),
+    ARG_subtypes = paste(sort(unique(Subtype)), collapse = "; "),
+    pathogen_species = paste(sort(unique(pathogen_species)), collapse = "; "),
+    .groups = "drop"
+  ) %>%
+  arrange(Rank)
+
+write_csv(
+  rhizo_ARG_rank_summary,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_rank_summary.csv")
+)
+
+print(rhizo_ARG_rank_summary)
+
+rank_cols <- c(
+  "I" = "#E64B35",
+  "II" = "#F39B7F",
+  "III" = "#4DBBD5",
+  "IV" = "#00A087",
+  "Unassigned" = "grey80"
+)
+
+p_ARG_rank <- rhizo_ARG_rank_summary %>%
+  mutate(
+    Rank = factor(Rank, levels = c("I", "II", "III", "IV", "Unassigned"))
+  ) %>%
+  ggplot(aes(x = Rank, y = n_ARG_contig, fill = Rank)) +
+  geom_col(width = 0.7) +
+  scale_fill_manual(values = rank_cols, drop = FALSE) +
+  labs(
+    x = "ARG risk rank",
+    y = "Number of ARG-carrying contigs",
+    fill = "Rank"
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    legend.position = "none"
+  )
+
+ggsave(
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_rank_summary.pdf"),
+  p_ARG_rank,
+  width = 5,
+  height = 4.5,
+  device = cairo_pdf
+)
+
+ggsave(
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_rank_summary.png"),
+  p_ARG_rank,
+  width = 5,
+  height = 4.5,
+  dpi = 300
+)
+# ============================================================
+# 9.6 ARG Type × Mechanism × Rank combination
+# ============================================================
+
+rhizo_ARG_type_mechanism_rank <- rhizo_ARG_use %>%
+  group_by(Type, Mechanism.group, Rank) %>%
+  summarise(
+    n_ARG_hits = n(),
+    n_ARG_contig = n_distinct(Name),
+    n_pathogen_species = n_distinct(pathogen_species),
+    ARG_subtypes = paste(sort(unique(Subtype)), collapse = "; "),
+    pathogen_species = paste(sort(unique(pathogen_species)), collapse = "; "),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_ARG_contig), Type, Mechanism.group, Rank)
+
+write_csv(
+  rhizo_ARG_type_mechanism_rank,
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_type_mechanism_rank_summary.csv")
+)
+
+print(rhizo_ARG_type_mechanism_rank)
+# ============================================================
+# 9.7 Heatmap: pathogen species × ARG type
+# ============================================================
+
+pathogen_ARG_type_mat <- rhizo_ARG_use %>%
+  group_by(pathogen_species, Type) %>%
+  summarise(
+    n_ARG_contig = n_distinct(Name),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = Type,
+    values_from = n_ARG_contig,
+    values_fill = 0
+  ) %>%
+  as.data.frame()
+
+rownames(pathogen_ARG_type_mat) <- pathogen_ARG_type_mat$pathogen_species
+pathogen_ARG_type_mat$pathogen_species <- NULL
+
+pathogen_ARG_type_mat <- as.matrix(pathogen_ARG_type_mat)
+
+pdf(
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_species_ARG_type_heatmap.pdf"),
+  width = 8,
+  height = 7
+)
+
+Heatmap(
+  pathogen_ARG_type_mat,
+  name = "ARG contigs",
+  col = colorRamp2(
+    c(0, max(pathogen_ARG_type_mat, na.rm = TRUE)),
+    c("white", "#E64B35")
+  ),
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  row_names_gp = grid::gpar(fontface = "italic", fontsize = 8),
+  column_names_gp = grid::gpar(fontsize = 8)
+)
+
+dev.off()
+# ============================================================
+# 9.8 Heatmap: pathogen species × ARG mechanism
+# ============================================================
+
+pathogen_ARG_mechanism_mat <- rhizo_ARG_use %>%
+  group_by(pathogen_species, Mechanism.group) %>%
+  summarise(
+    n_ARG_contig = n_distinct(Name),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = Mechanism.group,
+    values_from = n_ARG_contig,
+    values_fill = 0
+  ) %>%
+  as.data.frame()
+
+rownames(pathogen_ARG_mechanism_mat) <- pathogen_ARG_mechanism_mat$pathogen_species
+pathogen_ARG_mechanism_mat$pathogen_species <- NULL
+
+pathogen_ARG_mechanism_mat <- as.matrix(pathogen_ARG_mechanism_mat)
+
+pdf(
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_species_ARG_mechanism_heatmap.pdf"),
+  width = 8,
+  height = 7
+)
+
+Heatmap(
+  pathogen_ARG_mechanism_mat,
+  name = "ARG contigs",
+  col = colorRamp2(
+    c(0, max(pathogen_ARG_mechanism_mat, na.rm = TRUE)),
+    c("white", "#00A087")
+  ),
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  row_names_gp = grid::gpar(fontface = "italic", fontsize = 8),
+  column_names_gp = grid::gpar(fontsize = 8)
+)
+
+dev.off()
+# ============================================================
+# 9.9 Heatmap: pathogen species × ARG Rank
+# ============================================================
+
+pathogen_ARG_rank_mat <- rhizo_ARG_use %>%
+  group_by(pathogen_species, Rank) %>%
+  summarise(
+    n_ARG_contig = n_distinct(Name),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = Rank,
+    values_from = n_ARG_contig,
+    values_fill = 0
+  ) %>%
+  as.data.frame()
+
+rownames(pathogen_ARG_rank_mat) <- pathogen_ARG_rank_mat$pathogen_species
+pathogen_ARG_rank_mat$pathogen_species <- NULL
+
+pathogen_ARG_rank_mat <- as.matrix(pathogen_ARG_rank_mat)
+
+pdf(
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_species_ARG_rank_heatmap.pdf"),
+  width = 7,
+  height = 7
+)
+
+Heatmap(
+  pathogen_ARG_rank_mat,
+  name = "ARG contigs",
+  col = colorRamp2(
+    c(0, max(pathogen_ARG_rank_mat, na.rm = TRUE)),
+    c("white", "#3C5488")
+  ),
+  cluster_rows = TRUE,
+  cluster_columns = FALSE,
+  row_names_gp = grid::gpar(fontface = "italic", fontsize = 8),
+  column_names_gp = grid::gpar(fontsize = 8)
+)
+
+dev.off()
+# ============================================================
+# 9.10 Combined figure: Type + Mechanism + Rank
+# ============================================================
+
+p_ARG_combined <- p_ARG_type + p_ARG_mechanism + p_ARG_rank +
+  plot_layout(ncol = 3, widths = c(1.2, 1.3, 0.8))
+
+ggsave(
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_type_mechanism_rank_combined.pdf"),
+  p_ARG_combined,
+  width = 14,
+  height = 5,
+  device = cairo_pdf
+)
+
+ggsave(
+  file.path(output_patho_arg, "rhizosphere_enriched_pathogen_ARG_type_mechanism_rank_combined.png"),
+  p_ARG_combined,
+  width = 14,
+  height = 5,
+  dpi = 300
+)
+
+
+rhizosphere_enriched_pathogen_ARG_type_summary.csv
+rhizosphere_enriched_pathogen_ARG_subtype_summary.csv
+rhizosphere_enriched_pathogen_ARG_mechanism_group_summary.csv
+rhizosphere_enriched_pathogen_ARG_mechanism_subgroup_summary.csv
+rhizosphere_enriched_pathogen_ARG_rank_summary.csv
+rhizosphere_enriched_pathogen_ARG_type_mechanism_rank_summary.csv
+
+rhizosphere_enriched_pathogen_ARG_type_summary.pdf
+rhizosphere_enriched_pathogen_ARG_mechanism_group_summary.pdf
+rhizosphere_enriched_pathogen_ARG_rank_summary.pdf
+rhizosphere_enriched_pathogen_ARG_type_mechanism_rank_combined.pdf
+
+rhizosphere_enriched_pathogen_species_ARG_type_heatmap.pdf
+rhizosphere_enriched_pathogen_species_ARG_mechanism_heatmap.pdf
+rhizosphere_enriched_pathogen_species_ARG_rank_heatmap.pdf
