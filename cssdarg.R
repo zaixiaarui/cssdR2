@@ -763,28 +763,131 @@ if (nrow(all_mat) >= 3 && ncol(all_mat) >= 2) {
     filter(n() >= 3) %>%
     ungroup()
   
-  p_nmds_type <- ggplot(nmds_site, aes(x = MDS1, y = MDS2)) +
-    geom_point(aes(color = sample_type, shape = source), size = 2.6, alpha = 0.85) +
+  # -----------------------------
+  # 1. 设置 Lancet 风格配色
+  # -----------------------------
+  sample_type_levels <- sort(unique(nmds_site$sample_type))
+  
+  nmds_cols <- colorRampPalette(
+    ggsci::pal_lancet("lanonc")(9)
+  )(length(sample_type_levels))
+  
+  names(nmds_cols) <- sample_type_levels
+  # -----------------------------
+  # NMDS plot：color = sample_type，shape = type
+  # Lancet style color
+  # -----------------------------
+  
+  library(tidyverse)
+  
+  if (!requireNamespace("ggsci", quietly = TRUE)) {
+    install.packages("ggsci")
+  }
+  library(ggsci)
+  
+  nmds_site <- nmds_site %>%
+    mutate(
+      sample_type = as.character(sample_type),
+      type = as.character(type),
+      source = as.character(source),
+      sample_type = coalesce(sample_type, "Unknown"),
+      type = coalesce(type, "Unknown")
+    )
+  
+  ellipse_group <- nmds_site %>%
+    group_by(sample_type) %>%
+    filter(n() >= 3) %>%
+    ungroup()
+  
+  # -----------------------------
+  # Lancet 风格配色
+  # -----------------------------
+  sample_type_levels <- sort(unique(nmds_site$sample_type))
+  
+  nmds_cols <- colorRampPalette(
+    ggsci::pal_lancet("lanonc")(9)
+  )(length(sample_type_levels))
+  
+  names(nmds_cols) <- sample_type_levels
+  
+  # -----------------------------
+  # type 对应形状
+  # -----------------------------
+  type_levels <- sort(unique(nmds_site$type))
+  
+  type_shapes <- rep(
+    c(16, 17, 15, 18, 3, 4, 7, 8, 1, 2, 0, 5, 6),
+    length.out = length(type_levels)
+  )
+  
+  names(type_shapes) <- type_levels
+  
+  # -----------------------------
+  # NMDS 作图
+  # -----------------------------
+  p_nmds_type <- ggplot(
+    nmds_site,
+    aes(x = MDS1, y = MDS2)
+  ) +
     stat_ellipse(
       data = ellipse_group,
-      aes(fill = sample_type),
+      aes(
+        fill = sample_type,
+        group = sample_type
+      ),
       geom = "polygon",
       level = 0.95,
-      alpha = 0.12,
+      alpha = 0.13,
+      color = NA,
       show.legend = FALSE
     ) +
+    geom_point(
+      aes(
+        color = sample_type,
+        shape = type
+      ),
+      size = 3,
+      alpha = 0.9
+    ) +
+    scale_color_manual(values = nmds_cols) +
+    scale_fill_manual(values = nmds_cols) +
+    scale_shape_manual(values = type_shapes) +
     theme_bw() +
-    theme(panel.grid = element_blank()) +
+    theme(
+      panel.grid = element_blank(),
+      axis.text = element_text(size = 11, color = "black"),
+      axis.title = element_text(size = 13, color = "black"),
+      plot.title = element_text(size = 14, hjust = 0.5),
+      legend.title = element_text(size = 11),
+      legend.text = element_text(size = 10),
+      legend.position = "right"
+    ) +
     labs(
-      title = paste0("NMDS based on ARG subtype profiles; stress = ", round(nmds$stress, 4)),
+      title = paste0(
+        "NMDS based on ARG subtype profiles; stress = ",
+        round(nmds$stress, 4)
+      ),
       x = "NMDS1",
       y = "NMDS2",
       color = "Sample type",
-      shape = "Source"
+      fill = "Sample type",
+      shape = "Type"
     )
   
-  save(p_nmds_type, file = file.path(output, "p_NMDS_ARG_by_sample_type.rda"))
-  ggsave(file.path(output, "p_NMDS_ARG_by_sample_type.pdf"), p_nmds_type, width = 6.5, height = 5)
+  p_nmds_type
+  
+  save(
+    p_nmds_type,
+    file = file.path(output, "p_NMDS_ARG_by_sample_type_shape_type_Lancet.rda")
+  )
+  
+  ggsave(
+    file.path(output, "p_NMDS_ARG_by_sample_type_shape_type_Lancet.pdf"),
+    p_nmds_type,
+    width = 10.5,
+    height = 7
+  )
+  
 }
 
 # -----------------------------
@@ -2978,4 +3081,925 @@ ggsave(
 # ============================================================
 # 完成
 # ============================================================
+# ============================================================
+# Total ARGs + High risk ARGs (Rank I) by sample type
+# 参考箱线图 + jitter 样式
+#
+# 依赖对象：
+#   arg_total_all
+#   arg_long_all
+#   output
+# ============================================================
+
+# ============================================================
+# Total ARGs + High risk ARGs (Rank I) by type1
+# highlight: urban wetlands rhizosphere = red
+# 删除平均值点
+#
+# 依赖对象：
+#   arg_total_all
+#   arg_long_all
+#   output
+# ============================================================
+
+library(tidyverse)
+library(patchwork)
+
+dir.create(output, recursive = TRUE, showWarnings = FALSE)
+
+# -----------------------------
+# 0. 统一 type1 名称
+# -----------------------------
+arg_total_all <- arg_total_all %>%
+  mutate(
+    type1 = str_trim(type1),
+    type1 = if_else(
+      type1 == "Constructed Wetland rhizosphere",
+      "Constructed wetlands rhizosphere",
+      type1
+    )
+  )
+
+arg_long_all <- arg_long_all %>%
+  mutate(
+    type1 = str_trim(type1),
+    type1 = if_else(
+      type1 == "Constructed Wetland rhizosphere",
+      "Constructed wetlands rhizosphere",
+      type1
+    )
+  )
+
+# -----------------------------
+# 1. Total ARGs：每个样本总丰度
+# -----------------------------
+total_arg_type1 <- arg_total_all %>%
+  mutate(
+    sample_uid = paste(source, sample, sep = "__"),
+    sample_type1 = coalesce(type1, "Unknown")
+  ) %>%
+  select(
+    sample_uid,
+    sample,
+    source,
+    sample_type1,
+    Total_ARGs = ARG_abundance
+  )
+
+# -----------------------------
+# 2. Rank I ARGs：每个样本 Rank I ARG 丰度
+# -----------------------------
+rankI_arg_type1 <- arg_long_all %>%
+  mutate(
+    sample_uid = paste(source, sample, sep = "__"),
+    sample_type1 = coalesce(type1, "Unknown"),
+    Rank = str_trim(as.character(Rank)),
+    Rank = replace_na(Rank, "Unknown")
+  ) %>%
+  filter(Rank == "I") %>%
+  group_by(sample_uid) %>%
+  summarise(
+    RankI_ARGs = sum(value, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# 没有 Rank I 的样本补 0
+rankI_arg_type1 <- total_arg_type1 %>%
+  select(sample_uid, sample, source, sample_type1) %>%
+  left_join(rankI_arg_type1, by = "sample_uid") %>%
+  mutate(
+    RankI_ARGs = replace_na(RankI_ARGs, 0)
+  )
+
+# -----------------------------
+# 3. 按 Total ARGs 平均丰度从高到低排序
+# -----------------------------
+type1_order <- total_arg_type1 %>%
+  group_by(sample_type1) %>%
+  summarise(
+    mean_Total_ARGs = mean(Total_ARGs, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_Total_ARGs)) %>%
+  pull(sample_type1)
+
+total_arg_type1 <- total_arg_type1 %>%
+  mutate(
+    sample_type1 = factor(sample_type1, levels = type1_order),
+    highlight_group = if_else(
+      as.character(sample_type1) == "urban wetlands rhizosphere",
+      "urban wetlands rhizosphere",
+      "Others"
+    )
+  )
+
+rankI_arg_type1 <- rankI_arg_type1 %>%
+  mutate(
+    sample_type1 = factor(sample_type1, levels = type1_order),
+    highlight_group = if_else(
+      as.character(sample_type1) == "urban wetlands rhizosphere",
+      "urban wetlands rhizosphere",
+      "Others"
+    )
+  )
+
+# -----------------------------
+# 4. 设置颜色
+# -----------------------------
+highlight_cols <- c(
+  "urban wetlands rhizosphere" = "red",
+  "Others" = "gray65"
+)
+
+box_cols <- c(
+  "urban wetlands rhizosphere" = "red",
+  "Others" = "gray40"
+)
+
+# -----------------------------
+# 5. 输出统计表
+# -----------------------------
+total_arg_type1_summary <- total_arg_type1 %>%
+  group_by(sample_type1) %>%
+  summarise(
+    n_sample = n_distinct(sample_uid),
+    mean_Total_ARGs = mean(Total_ARGs, na.rm = TRUE),
+    median_Total_ARGs = median(Total_ARGs, na.rm = TRUE),
+    sd_Total_ARGs = sd(Total_ARGs, na.rm = TRUE),
+    min_Total_ARGs = min(Total_ARGs, na.rm = TRUE),
+    max_Total_ARGs = max(Total_ARGs, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_Total_ARGs))
+
+rankI_arg_type1_summary <- rankI_arg_type1 %>%
+  group_by(sample_type1) %>%
+  summarise(
+    n_sample = n_distinct(sample_uid),
+    mean_RankI_ARGs = mean(RankI_ARGs, na.rm = TRUE),
+    median_RankI_ARGs = median(RankI_ARGs, na.rm = TRUE),
+    sd_RankI_ARGs = sd(RankI_ARGs, na.rm = TRUE),
+    min_RankI_ARGs = min(RankI_ARGs, na.rm = TRUE),
+    max_RankI_ARGs = max(RankI_ARGs, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(factor(sample_type1, levels = type1_order))
+
+write_csv(
+  total_arg_type1_summary,
+  file.path(output, "summary_Total_ARGs_by_type1_highlight_urban_rhizosphere.csv")
+)
+
+write_csv(
+  rankI_arg_type1_summary,
+  file.path(output, "summary_RankI_ARGs_by_type1_highlight_urban_rhizosphere.csv")
+)
+
+# -----------------------------
+# 6. Total ARGs 图
+# -----------------------------
+p_Total_ARGs_by_type1 <- ggplot(
+  total_arg_type1,
+  aes(x = sample_type1, y = Total_ARGs)
+) +
+  geom_boxplot(
+    aes(color = highlight_group),
+    width = 0.55,
+    outlier.shape = NA,
+    fill = "white",
+    linewidth = 0.45
+  ) +
+  geom_jitter(
+    aes(color = highlight_group),
+    width = 0.18,
+    size = 1.4,
+    alpha = 0.65
+  ) +
+  scale_color_manual(values = box_cols) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1,
+      vjust = 1,
+      size = 9
+    ),
+    axis.text.y = element_text(size = 10),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14, hjust = 0.5),
+    legend.position = "none"
+  ) +
+  labs(
+    title = "Total ARGs",
+    x = NULL,
+    y = "ARGs copy number\n(copies / cell)"
+  )
+
+# -----------------------------
+# 7. High risk ARGs (Rank I) 图
+# -----------------------------
+p_RankI_ARGs_by_type1 <- ggplot(
+  rankI_arg_type1,
+  aes(x = sample_type1, y = RankI_ARGs)
+) +
+  geom_boxplot(
+    aes(color = highlight_group),
+    width = 0.55,
+    outlier.shape = NA,
+    fill = "white",
+    linewidth = 0.45
+  ) +
+  geom_jitter(
+    aes(color = highlight_group),
+    width = 0.18,
+    size = 1.4,
+    alpha = 0.65
+  ) +
+  scale_color_manual(values = box_cols) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1,
+      vjust = 1,
+      size = 9
+    ),
+    axis.text.y = element_text(size = 10),
+    axis.title = element_text(size = 12),
+    plot.title = element_text(size = 14, hjust = 0.5),
+    legend.position = "none"
+  ) +
+  labs(
+    title = "High risk ARGs (Rank I)",
+    x = NULL,
+    y = "ARGs copy number\n(copies / cell)"
+  )
+
+# -----------------------------
+# 8. 合并双图
+# -----------------------------
+p_Total_RankI_ARGs_by_type1 <- p_Total_ARGs_by_type1 + p_RankI_ARGs_by_type1 +
+  plot_annotation(tag_levels = "a")
+
+p_Total_RankI_ARGs_by_type1
+
+# -----------------------------
+# 9. 保存结果
+# -----------------------------
+save(
+  p_Total_ARGs_by_type1,
+  file = file.path(output, "p_Total_ARGs_by_type1_highlight_urban_rhizosphere_no_mean.rda")
+)
+
+save(
+  p_RankI_ARGs_by_type1,
+  file = file.path(output, "p_RankI_ARGs_by_type1_highlight_urban_rhizosphere_no_mean.rda")
+)
+
+save(
+  p_Total_RankI_ARGs_by_type1,
+  file = file.path(output, "p_Total_ARGs_and_RankI_ARGs_by_type1_highlight_urban_rhizosphere_no_mean.rda")
+)
+
+ggsave(
+  file.path(output, "p_Total_ARGs_by_type1_highlight_urban_rhizosphere_no_mean.pdf"),
+  p_Total_ARGs_by_type1,
+  width = 6,
+  height = 5
+)
+
+ggsave(
+  file.path(output, "p_RankI_ARGs_by_type1_highlight_urban_rhizosphere_no_mean.pdf"),
+  p_RankI_ARGs_by_type1,
+  width = 6,
+  height = 5
+)
+
+ggsave(
+  file.path(output, "p_Total_ARGs_and_RankI_ARGs_by_type1_highlight_urban_rhizosphere_no_mean.pdf"),
+  p_Total_RankI_ARGs_by_type1,
+  width = 12,
+  height = 5
+)
+# ============================================================
+# 城市湿地根际 ARG 气泡图
+# 大圆圈 = ARG type
+# 小圆圈 = ARG subtype
+# type 字体颜色 = type 圆圈颜色
+# 圆圈和边框透明度 = 50%
+#
+# 依赖对象：
+#   arg_long_all
+#   output
+# ============================================================
+
+pkgs <- c("tidyverse", "igraph", "tidygraph", "ggraph", "RColorBrewer")
+
+for (pkg in pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+  library(pkg, character.only = TRUE)
+}
+
+dir.create(output, recursive = TRUE, showWarnings = FALSE)
+
+# -----------------------------
+# 0. 参数设置
+# -----------------------------
+target_group <- "urban wetlands rhizosphere"
+top_subtype_n <- 100
+label_subtype_n <- 20
+min_abundance <- 0
+
+# -----------------------------
+# 1. 整理数据
+# -----------------------------
+arg_plot_base <- arg_long_all %>%
+  mutate(
+    type1 = str_trim(type1),
+    type1_std = str_to_lower(type1),
+    arg_type = replace_na(type, "others"),
+    subtype = as.character(subtype)
+  ) %>%
+  filter(type1_std == target_group) %>%
+  group_by(sample, arg_type, subtype) %>%
+  summarise(
+    sample_value = sum(value, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(arg_type, subtype) %>%
+  summarise(
+    mean_abundance = mean(sample_value, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  filter(mean_abundance > min_abundance) %>%
+  arrange(desc(mean_abundance))
+
+# -----------------------------
+# 2. 仅保留丰度前 top_subtype_n 个 subtype
+# -----------------------------
+arg_subtype_plot <- arg_plot_base %>%
+  arrange(desc(mean_abundance)) %>%
+  slice_head(n = top_subtype_n) %>%
+  mutate(
+    label_flag = row_number() <= label_subtype_n
+  )
+
+# -----------------------------
+# 3. 汇总 type 丰度（大圆圈大小）
+# -----------------------------
+arg_type_plot <- arg_subtype_plot %>%
+  group_by(arg_type) %>%
+  summarise(
+    mean_abundance = sum(mean_abundance, na.rm = TRUE),
+    n_subtype = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_abundance))
+
+# -----------------------------
+# 4. 输出表
+# -----------------------------
+write_csv(
+  arg_subtype_plot,
+  file.path(output, "urban_wetlands_rhizosphere_ARG_subtype_top100_for_bubble.csv")
+)
+
+write_csv(
+  arg_type_plot,
+  file.path(output, "urban_wetlands_rhizosphere_ARG_type_for_bubble.csv")
+)
+
+# -----------------------------
+# 5. 构建层级节点：root -> type -> subtype
+# -----------------------------
+root_node <- tibble(
+  name = "Urban wetlands rhizosphere",
+  parent = NA_character_,
+  node_class = "root",
+  arg_type = NA_character_,
+  weight = sum(arg_type_plot$mean_abundance, na.rm = TRUE),
+  label_flag = FALSE
+)
+
+type_nodes <- arg_type_plot %>%
+  transmute(
+    name = arg_type,
+    parent = "Urban wetlands rhizosphere",
+    node_class = "type",
+    arg_type = arg_type,
+    weight = mean_abundance,
+    label_flag = TRUE
+  )
+
+subtype_nodes <- arg_subtype_plot %>%
+  transmute(
+    name = subtype,
+    parent = arg_type,
+    node_class = "subtype",
+    arg_type = arg_type,
+    weight = mean_abundance,
+    label_flag = label_flag
+  )
+
+nodes <- bind_rows(root_node, type_nodes, subtype_nodes)
+
+edges <- nodes %>%
+  filter(!is.na(parent)) %>%
+  transmute(
+    from = parent,
+    to = name
+  )
+
+# -----------------------------
+# 6. 构建图对象
+# -----------------------------
+g <- graph_from_data_frame(
+  d = edges,
+  vertices = nodes,
+  directed = TRUE
+) %>%
+  as_tbl_graph()
+
+# -----------------------------
+# 7. 配色
+# -----------------------------
+arg_type_levels <- unique(type_nodes$arg_type)
+
+arg_type_colors <- c(
+  brewer.pal(12, "Paired"),
+  brewer.pal(8, "Dark2"),
+  brewer.pal(8, "Set2"),
+  brewer.pal(8, "Accent")
+)
+
+arg_type_colors <- rep(arg_type_colors, length.out = length(arg_type_levels))
+names(arg_type_colors) <- arg_type_levels
+
+# -----------------------------
+# 8. 绘制气泡图
+# 圆圈与边框透明度统一为 50%
+# -----------------------------
+p_ARG_bubble_urban_rhizo <- ggraph(
+  g,
+  layout = "circlepack",
+  weight = weight
+) +
+  # type 大圆圈边框
+  geom_node_circle(
+    aes(
+      filter = node_class == "type",
+      color = arg_type
+    ),
+    fill = NA,
+    linewidth = 1.2,
+    alpha = 0.5
+  ) +
+  # subtype 小圆圈（填充 + 边框透明度都为50%）
+  geom_node_circle(
+    aes(
+      filter = node_class == "subtype",
+      fill = arg_type
+    ),
+    color = "gray40",
+    linewidth = 0.25,
+    alpha = 0.5
+  ) +
+  # type 标签：颜色与 type 圆圈颜色一致
+  geom_node_text(
+    aes(
+      filter = node_class == "type",
+      label = name,
+      color = arg_type
+    ),
+    fontface = "bold",
+    size = 5,
+    show.legend = FALSE
+  ) +
+  # subtype 标签：仅标注前 label_subtype_n 个
+  geom_node_text(
+    aes(
+      filter = node_class == "subtype" & label_flag,
+      label = name
+    ),
+    color = "black",
+    size = 2.8,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(values = arg_type_colors, na.value = "gray70") +
+  scale_fill_manual(values = arg_type_colors, na.value = "gray80") +
+  coord_equal() +
+  theme_void() +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 11),
+    legend.text = element_text(size = 9),
+    plot.title = element_text(size = 14, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(size = 10, hjust = 0.5)
+  ) +
+  labs(
+    title = "ARG subtype bubble plot in urban wetlands rhizosphere",
+    subtitle = paste0(
+      "Large circles = ARG type; small circles = subtype; ",
+      "bubble size = mean absolute abundance"
+    ),
+    fill = "ARG type",
+    color = "ARG type"
+  )
+
+p_ARG_bubble_urban_rhizo
+
+# -----------------------------
+# 9. 保存图
+# -----------------------------
+save(
+  p_ARG_bubble_urban_rhizo,
+  file = file.path(output, "p_ARG_bubble_urban_wetlands_rhizosphere_alpha50.rda")
+)
+
+ggsave(
+  file.path(output, "p_ARG_bubble_urban_wetlands_rhizosphere_alpha50.pdf"),
+  p_ARG_bubble_urban_rhizo,
+  width = 11,
+  height = 8
+)
+
+ggsave(
+  file.path(output, "p_ARG_bubble_urban_wetlands_rhizosphere_alpha50.png"),
+  p_ARG_bubble_urban_rhizo,
+  width = 11,
+  height = 8,
+  dpi = 300
+)
+
+# ============================================================
+# 完成
+# ============================================================
+
+# ============================================================
+# 城市湿地根际 ARG 气泡图
+# 大圆圈 = ARG type
+# 小圆圈 = ARG subtype
+# 圆圈和边框透明度 = 50%
+# type 字体颜色 = 对应 type 圆圈颜色
+# subtype 字体颜色 = Risk rank（按用户提供配色）
+#
+# 依赖对象：
+#   arg_long_all
+#   output
+# ============================================================
+
+pkgs <- c(
+  "tidyverse",
+  "igraph",
+  "tidygraph",
+  "ggraph",
+  "RColorBrewer",
+  "ggnewscale"
+)
+
+for (pkg in pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+  library(pkg, character.only = TRUE)
+}
+
+dir.create(output, recursive = TRUE, showWarnings = FALSE)
+
+# -----------------------------
+# 0. 参数设置
+# -----------------------------
+target_group <- "urban wetlands rhizosphere"
+top_subtype_n <- 100
+label_subtype_n <- 20
+min_abundance <- 0
+
+# -----------------------------
+# 1. 整理数据
+# -----------------------------
+arg_plot_base <- arg_long_all %>%
+  mutate(
+    type1 = str_trim(type1),
+    type1_std = str_to_lower(type1),
+    source = coalesce(as.character(source), "Unknown"),
+    sample = as.character(sample),
+    arg_type = replace_na(type, "others"),
+    subtype = as.character(subtype),
+    Rank = str_trim(as.character(Rank)),
+    Rank = str_replace(Rank, "^Rank\\s+", ""),
+    Rank = case_when(
+      Rank %in% c("I", "1") ~ "I",
+      Rank %in% c("II", "2") ~ "II",
+      Rank %in% c("III", "3") ~ "III",
+      Rank %in% c("IV", "4") ~ "IV",
+      is.na(Rank) | Rank == "" ~ "Unknown",
+      TRUE ~ Rank
+    )
+  ) %>%
+  filter(type1_std == target_group) %>%
+  mutate(
+    sample_uid = paste(source, sample, sep = "__")
+  ) %>%
+  group_by(sample_uid, arg_type, subtype, Rank) %>%
+  summarise(
+    sample_value = sum(value, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(arg_type, subtype, Rank) %>%
+  summarise(
+    mean_abundance = mean(sample_value, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  filter(mean_abundance > min_abundance) %>%
+  arrange(desc(mean_abundance))
+
+# -----------------------------
+# 2. 保留丰度前 top_subtype_n 个 subtype
+# -----------------------------
+arg_subtype_plot <- arg_plot_base %>%
+  arrange(desc(mean_abundance)) %>%
+  slice_head(n = top_subtype_n) %>%
+  mutate(
+    label_flag = row_number() <= label_subtype_n
+  )
+
+# -----------------------------
+# 3. 汇总 type 丰度
+# -----------------------------
+arg_type_plot <- arg_subtype_plot %>%
+  group_by(arg_type) %>%
+  summarise(
+    mean_abundance = sum(mean_abundance, na.rm = TRUE),
+    n_subtype = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_abundance))
+
+# -----------------------------
+# 4. 输出数据表
+# -----------------------------
+write_csv(
+  arg_subtype_plot,
+  file.path(output, "urban_wetlands_rhizosphere_ARG_subtype_top100_for_bubble_rank_color.csv")
+)
+
+write_csv(
+  arg_type_plot,
+  file.path(output, "urban_wetlands_rhizosphere_ARG_type_for_bubble_rank_color.csv")
+)
+
+# -----------------------------
+# 5. 构建层级节点：root -> type -> subtype
+# 使用 node_id 避免 type 和 subtype 名称重复
+# -----------------------------
+root_node <- tibble(
+  node_id = "root",
+  label = "Urban wetlands rhizosphere",
+  parent_id = NA_character_,
+  node_class = "root",
+  arg_type = NA_character_,
+  Rank = NA_character_,
+  weight = sum(arg_type_plot$mean_abundance, na.rm = TRUE),
+  label_flag = FALSE
+)
+
+type_nodes <- arg_type_plot %>%
+  mutate(
+    node_id = paste0("type__", arg_type),
+    parent_id = "root"
+  ) %>%
+  transmute(
+    node_id,
+    label = arg_type,
+    parent_id,
+    node_class = "type",
+    arg_type = arg_type,
+    Rank = NA_character_,
+    weight = mean_abundance,
+    label_flag = TRUE
+  )
+
+subtype_nodes <- arg_subtype_plot %>%
+  mutate(
+    node_id = paste0("subtype__", arg_type, "__", subtype),
+    parent_id = paste0("type__", arg_type)
+  ) %>%
+  transmute(
+    node_id,
+    label = subtype,
+    parent_id,
+    node_class = "subtype",
+    arg_type = arg_type,
+    Rank = Rank,
+    weight = mean_abundance,
+    label_flag = label_flag
+  )
+
+nodes <- bind_rows(
+  root_node,
+  type_nodes,
+  subtype_nodes
+)
+
+edges <- nodes %>%
+  filter(!is.na(parent_id)) %>%
+  transmute(
+    from = parent_id,
+    to = node_id
+  )
+
+vertices <- nodes %>%
+  rename(name = node_id)
+
+# -----------------------------
+# 6. 构建图对象
+# -----------------------------
+g <- graph_from_data_frame(
+  d = edges,
+  vertices = vertices,
+  directed = TRUE
+) %>%
+  as_tbl_graph()
+
+# -----------------------------
+# 7. ARG type 配色
+# -----------------------------
+arg_type_levels <- arg_type_plot$arg_type
+
+arg_type_colors <- c(
+  brewer.pal(12, "Paired"),
+  brewer.pal(8, "Dark2"),
+  brewer.pal(8, "Set2"),
+  brewer.pal(8, "Accent")
+)
+
+arg_type_colors <- rep(
+  arg_type_colors,
+  length.out = length(arg_type_levels)
+)
+
+names(arg_type_colors) <- arg_type_levels
+
+# -----------------------------
+# 8. Risk rank 字体配色
+# 按用户提供的 rank_col
+# -----------------------------
+rank_text_colors <- c(
+  "I" = "#D9369E",
+  "II" = "#E65A9A",
+  "III" = "#F08AA5",
+  "IV" = "#F6BFC0",
+  "Unknown" = "#BDBDBD"
+)
+
+rank_breaks <- c("I", "II", "III", "IV", "Unknown")
+
+# -----------------------------
+# 9. 绘制气泡图
+# -----------------------------
+p_ARG_bubble_urban_rhizo <- ggraph(
+  g,
+  layout = "circlepack",
+  weight = weight
+) +
+  # type 大圆圈边框：透明度 50%
+  geom_node_circle(
+    aes(
+      filter = node_class == "type",
+      color = arg_type
+    ),
+    fill = NA,
+    linewidth = 1.2,
+    alpha = 0.5,
+    show.legend = FALSE
+  ) +
+  
+  # subtype 小圆圈：填充和边框透明度 50%
+  geom_node_circle(
+    aes(
+      filter = node_class == "subtype",
+      fill = arg_type
+    ),
+    color = "gray40",
+    linewidth = 0.25,
+    alpha = 0.5,
+    show.legend = TRUE
+  ) +
+  
+  # type 标签：颜色与 type 圆圈颜色一致
+  geom_node_text(
+    aes(
+      filter = node_class == "type",
+      label = label,
+      color = arg_type
+    ),
+    fontface = "bold",
+    size = 5,
+    show.legend = FALSE
+  ) +
+  
+  scale_color_manual(
+    values = arg_type_colors,
+    na.value = "gray70",
+    guide = "none"
+  ) +
+  
+  scale_fill_manual(
+    values = arg_type_colors,
+    na.value = "gray80",
+    name = "ARG type"
+  ) +
+  
+  # 开启新的 color 图例，用于 subtype 标签的 Risk rank
+  ggnewscale::new_scale_color() +
+  
+  # subtype 标签：字体颜色按 Risk rank 标注
+  geom_node_text(
+    aes(
+      filter = node_class == "subtype" & label_flag,
+      label = label,
+      color = Rank
+    ),
+    size = 2.8,
+    fontface = "plain",
+    show.legend = TRUE
+  ) +
+  
+  scale_color_manual(
+    values = rank_text_colors,
+    breaks = rank_breaks,
+    limits = rank_breaks,
+    drop = FALSE,
+    na.value = "#BDBDBD",
+    name = "Risk rank"
+  ) +
+  
+  coord_equal() +
+  theme_void() +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 11),
+    legend.text = element_text(size = 9),
+    plot.title = element_text(
+      size = 14,
+      hjust = 0.5,
+      face = "bold"
+    ),
+    plot.subtitle = element_text(
+      size = 10,
+      hjust = 0.5
+    )
+  ) +
+  labs(
+    title = "ARG subtype bubble plot in urban wetlands rhizosphere",
+    subtitle = paste0(
+      "Large circles = ARG type; small circles = subtype; ",
+      "bubble size = mean absolute abundance; ",
+      "subtype label color = Risk rank"
+    )
+  )
+
+p_ARG_bubble_urban_rhizo
+
+# -----------------------------
+# 10. 保存图
+# -----------------------------
+save(
+  p_ARG_bubble_urban_rhizo,
+  file = file.path(
+    output,
+    "p_ARG_bubble_urban_wetlands_rhizosphere_subtype_text_by_user_rank_color_alpha50.rda"
+  )
+)
+
+ggsave(
+  file.path(
+    output,
+    "p_ARG_bubble_urban_wetlands_rhizosphere_subtype_text_by_user_rank_color_alpha50.pdf"
+  ),
+  p_ARG_bubble_urban_rhizo,
+  width = 11,
+  height = 8
+)
+
+ggsave(
+  file.path(
+    output,
+    "p_ARG_bubble_urban_wetlands_rhizosphere_subtype_text_by_user_rank_color_alpha50.png"
+  ),
+  p_ARG_bubble_urban_rhizo,
+  width = 11,
+  height = 8,
+  dpi = 300
+)
+
+# ============================================================
+# 完成
+# ============================================================
+
+
 
