@@ -1562,7 +1562,7 @@ cat("Output:", output_div, "\n")
 # 比较 Urban wetland / Urban wetland sediment / Urban wetlands rhizosphere
 # ============================================================
 
-output_patho <- file.path(output, "pathogen_distribution_type1")
+output_patho <- file.path("D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output", "pathogen_distribution_type1")
 dir.create(output_patho, recursive = TRUE, showWarnings = FALSE)
 
 library(tidyverse)
@@ -3187,6 +3187,9 @@ type1_comparisons <- list(
 # 29.1 绝对丰度 facet 图
 # -----------------------------
 
+#host_abs_test = read_csv("D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output/pathogen_distribution_type1/host_absolute_abundance_for_stat.csv",
+#                         show_col_types = FALSE)
+
 p_host_abs_diff <- ggplot(
   host_abs_test,
   aes(x = type1_group, y = log10_abs_count, fill = type1_group)
@@ -3222,10 +3225,10 @@ ggsave(
   file.path(output_patho, "host_specific_absolute_abundance_difference_type1.pdf"),
   p_host_abs_diff,
   width = 11,
-  height = 8,
+  height = 14,
   device = cairo_pdf
 )
-
+p_host_abs_diff
 ggsave(
   file.path(output_patho, "host_specific_absolute_abundance_difference_type1.png"),
   p_host_abs_diff,
@@ -3623,22 +3626,13 @@ ggsave(
 
 library(tidyverse)
 
-output_patho_arg <- file.path(output, "pathogen_ARG_host_contig")
+output_patho_arg <- file.path("D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output", "pathogen_ARG_host_contig")
 dir.create(output_patho_arg, recursive = TRUE, showWarnings = FALSE)
 
 # -----------------------------
 # 1.1 提取 microeco LEfSe 结果
 # -----------------------------
-
-# ============================================================
-# 1. 重新提取城市湿地根际富集病原菌
-# 正确拆分 microeco LEfSe 的 Taxa 字段
-# ============================================================
-
-library(tidyverse)
-
-output_patho_arg <- file.path(output, "pathogen_ARG_host_contig")
-dir.create(output_patho_arg, recursive = TRUE, showWarnings = FALSE)
+#lefse_pathogen_type1 <- readRDS("D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output/pathogen_distribution_type1/pathogen_lefse_microeco_type1/trans_diff_lefse_pathogen_type1.rds")
 
 lefse_res <- lefse_pathogen_type1$res_diff %>%
   as.data.frame()
@@ -4750,48 +4744,368 @@ write_csv(
 )
 
 print(pathogen_score_class_summary)
+
 # ============================================================
-# 12. 城市湿地根际富集病原菌的 ARG-MGE-VF 得分和分类
+# 12. 重新整理 LEfSe 根际富集病原菌，并匹配 ARG-MGE-VF score/class
+# 解决 pathogen_species 仍然是完整 Taxa 路径导致无法匹配的问题
 # ============================================================
 
-rhizo_enriched_pathogen_score <- rhizo_enriched_pathogen %>%
-  left_join(
-    host_score_use,
-    by = c("pathogen_species_clean" = "species_clean")
+library(tidyverse)
+library(ggplot2)
+
+output_patho_score <- file.path(output, "pathogen_ARG_MGE_VF_host_score")
+dir.create(output_patho_score, recursive = TRUE, showWarnings = FALSE)
+
+# -----------------------------
+# 12.1 使用 strict score/class
+# -----------------------------
+
+score_col <- "integrated_ARG_MGE_VF_score_strict"
+class_col <- "Integrated_host_class_strict"
+
+extra_score_cols <- c(
+  "risk_weighted_ARG_abun",
+  "risk_weighted_ARG_host_score",
+  "High_risk_ARG_evidence_strict",
+  "MGE_species_level_evidence",
+  "VF_species_level_evidence",
+  "risk_component"
+)
+
+stopifnot(score_col %in% colnames(ARG_MGE_VF_host_score))
+stopifnot(class_col %in% colnames(ARG_MGE_VF_host_score))
+
+# -----------------------------
+# 12.2 重新整理 rhizo_enriched_pathogen
+# 关键：Taxa 最后一级才是真正的 species
+# -----------------------------
+
+rhizo_enriched_pathogen_clean <- rhizo_enriched_pathogen %>%
+  mutate(
+    Taxa = as.character(Taxa),
+    
+    pathogen_species = Taxa %>%
+      str_replace(".*\\|", "") %>%
+      str_replace_all("^s__", "") %>%
+      str_replace_all("_", " ") %>%
+      str_squish(),
+    
+    pathogen_genus = Taxa %>%
+      str_replace("\\|[^|]+$", "") %>%
+      str_replace(".*\\|", "") %>%
+      str_replace_all("^g__", "") %>%
+      str_replace_all("_", " ") %>%
+      str_squish(),
+    
+    pathogen_genus = if_else(
+      pathogen_genus == pathogen_species | pathogen_genus == "" | is.na(pathogen_genus),
+      str_extract(pathogen_species, "^[^ ]+"),
+      pathogen_genus
+    ),
+    
+    pathogen_species_clean = pathogen_species %>%
+      str_to_lower() %>%
+      str_squish(),
+    
+    pathogen_genus_clean = pathogen_genus %>%
+      str_to_lower() %>%
+      str_squish()
   ) %>%
-  left_join(
-    pathogen_db_clean %>%
-      dplyr::select(
-        pathogen_species_clean,
-        Host
-      ),
-    by = "pathogen_species_clean"
-  ) %>%
-  arrange(desc(ARG_MGE_VF_score))
+  arrange(desc(LDA))
 
 write_csv(
-  rhizo_enriched_pathogen_score,
-  file.path(output_patho_score, "rhizosphere_enriched_pathogens_ARG_MGE_VF_host_score_class.csv")
+  rhizo_enriched_pathogen_clean,
+  file.path(output_patho_score, "rhizosphere_enriched_pathogen_LEfSe_species_clean.csv")
+)
+
+cat("重新拆分后的根际富集病原菌：\n")
+print(
+  rhizo_enriched_pathogen_clean %>%
+    dplyr::select(
+      Taxa,
+      pathogen_species,
+      pathogen_genus,
+      Group,
+      LDA,
+      P.adj,
+      Significance
+    ) %>%
+    head(20)
+)
+
+# ============================================================
+# 13. 整理 ARG_MGE_VF_host_score
+# ============================================================
+
+host_score_clean <- ARG_MGE_VF_host_score %>%
+  mutate(
+    taxid = as.character(taxid),
+    taxon = as.character(taxon),
+    Species = as.character(Species),
+    Genus = as.character(Genus),
+    
+    Species_clean = Species %>%
+      str_replace_all("^s__", "") %>%
+      str_replace_all("_", " ") %>%
+      str_squish() %>%
+      str_to_lower(),
+    
+    taxon_clean = taxon %>%
+      str_replace_all("^s__", "") %>%
+      str_replace_all("_", " ") %>%
+      str_squish() %>%
+      str_to_lower()
+  )
+
+host_score_use_base <- host_score_clean %>%
+  dplyr::select(
+    taxon,
+    taxid,
+    Kingdom,
+    Phylum,
+    Class,
+    Order,
+    Family,
+    Genus,
+    Species,
+    
+    total_contig_n,
+    ARG_carrying_contig_n,
+    MGE_carrying_contig_n,
+    VF_carrying_contig_n,
+    ARG_MGE_coloc_n,
+    ARG_VF_coloc_n,
+    MGE_VF_coloc_n,
+    ARG_MGE_VF_coloc_n,
+    
+    total_contig_abun,
+    ARG_carrying_contig_abun,
+    MGE_carrying_contig_abun,
+    VF_carrying_contig_abun,
+    
+    ARG_carrying_contig_ratio,
+    MGE_carrying_contig_ratio,
+    VF_carrying_contig_ratio,
+    
+    ARG_MGE_coloc_abun_ratio,
+    ARG_VF_coloc_abun_ratio,
+    MGE_VF_coloc_abun_ratio,
+    ARG_MGE_VF_coloc_abun_ratio,
+    
+    all_of(score_col),
+    all_of(class_col),
+    any_of(extra_score_cols),
+    
+    Species_clean,
+    taxon_clean
+  ) %>%
+  rename(
+    ARG_MGE_VF_score = all_of(score_col),
+    ARG_MGE_VF_class = all_of(class_col)
+  )
+
+# -----------------------------
+# 13.1 构建两个匹配 key：
+# key 1 = Species_clean
+# key 2 = taxon_clean
+# -----------------------------
+
+host_score_key_species <- host_score_use_base %>%
+  filter(
+    !is.na(Species_clean),
+    Species_clean != "",
+    Species_clean != "na",
+    Species_clean != "unassigned"
+  ) %>%
+  mutate(
+    match_key = Species_clean,
+    match_source = "Species"
+  )
+
+host_score_key_taxon <- host_score_use_base %>%
+  filter(
+    !is.na(taxon_clean),
+    taxon_clean != "",
+    taxon_clean != "na",
+    taxon_clean != "unassigned"
+  ) %>%
+  mutate(
+    match_key = taxon_clean,
+    match_source = "taxon"
+  )
+
+host_score_use <- bind_rows(
+  host_score_key_species,
+  host_score_key_taxon
+) %>%
+  arrange(match_key, match_source) %>%
+  distinct(match_key, .keep_all = TRUE)
+
+write_csv(
+  host_score_use,
+  file.path(output_patho_score, "ARG_MGE_VF_host_score_use_clean_with_match_key.csv")
+)
+
+cat("host_score_use 可匹配物种数：", n_distinct(host_score_use$match_key), "\n")
+
+# ============================================================
+# 14. 检查根际富集病原菌能否匹配到 score/class
+# ============================================================
+
+match_check_score <- rhizo_enriched_pathogen_clean %>%
+  dplyr::select(
+    pathogen_species,
+    pathogen_species_clean,
+    Group,
+    LDA,
+    P.adj
+  ) %>%
+  left_join(
+    host_score_use %>%
+      dplyr::select(
+        match_key,
+        taxon,
+        Species,
+        ARG_MGE_VF_score,
+        ARG_MGE_VF_class,
+        ARG_carrying_contig_n,
+        MGE_carrying_contig_n,
+        VF_carrying_contig_n,
+        match_source
+      ),
+    by = c("pathogen_species_clean" = "match_key")
+  ) %>%
+  mutate(
+    matched_score = !is.na(ARG_MGE_VF_score)
+  )
+
+write_csv(
+  match_check_score,
+  file.path(output_patho_score, "rhizosphere_enriched_pathogen_score_match_check.csv")
+)
+
+cat("根际富集病原菌总数：", nrow(match_check_score), "\n")
+cat("匹配到 ARG_MGE_VF score 的数量：", sum(match_check_score$matched_score), "\n")
+cat("匹配比例：", round(mean(match_check_score$matched_score) * 100, 2), "%\n")
+
+cat("\n未匹配到的物种：\n")
+print(
+  match_check_score %>%
+    filter(!matched_score) %>%
+    dplyr::select(pathogen_species, pathogen_species_clean)
+)
+
+cat("\n成功匹配的物种：\n")
+print(
+  match_check_score %>%
+    filter(matched_score) %>%
+    dplyr::select(
+      pathogen_species,
+      taxon,
+      Species,
+      ARG_MGE_VF_score,
+      ARG_MGE_VF_class,
+      match_source
+    )
+)
+
+# ============================================================
+# 15. 整理并导出根际富集病原菌 ARG-MGE-VF score/class 结果
+# ============================================================
+
+library(tidyverse)
+library(ggplot2)
+library(patchwork)
+
+dir.create(output_patho_score, recursive = TRUE, showWarnings = FALSE)
+
+rhizo_enriched_pathogen_score_view <- rhizo_enriched_pathogen_score %>%
+  dplyr::select(
+    pathogen_species,
+    pathogen_genus,
+    Host,
+    Group,
+    LDA,
+    P.unadj,
+    P.adj,
+    Significance,
+    taxon,
+    taxid,
+    Kingdom,
+    Phylum,
+    Class,
+    Order,
+    Family,
+    Genus,
+    Species,
+    ARG_MGE_VF_score,
+    ARG_MGE_VF_class,
+    risk_weighted_ARG_host_score,
+    risk_weighted_ARG_abun,
+    High_risk_ARG_evidence_strict,
+    MGE_species_level_evidence,
+    VF_species_level_evidence,
+    risk_component,
+    total_contig_n,
+    ARG_carrying_contig_n,
+    MGE_carrying_contig_n,
+    VF_carrying_contig_n,
+    ARG_MGE_coloc_n,
+    ARG_VF_coloc_n,
+    MGE_VF_coloc_n,
+    ARG_MGE_VF_coloc_n,
+    ARG_carrying_contig_ratio,
+    MGE_carrying_contig_ratio,
+    VF_carrying_contig_ratio,
+    ARG_MGE_coloc_abun_ratio,
+    ARG_VF_coloc_abun_ratio,
+    MGE_VF_coloc_abun_ratio,
+    ARG_MGE_VF_coloc_abun_ratio,
+    match_source
+  ) %>%
+  arrange(desc(ARG_MGE_VF_score), desc(LDA)) %>%
+  as_tibble()
+
+write_csv(
+  rhizo_enriched_pathogen_score_view,
+  file.path(
+    output_patho_score,
+    "rhizosphere_enriched_pathogens_ARG_MGE_VF_score_view.csv"
+  )
+)
+
+print(
+  rhizo_enriched_pathogen_score_view %>%
+    slice_head(n = 30),
+  n = 30,
+  width = Inf
 )
 
 cat("根际富集病原菌数量：",
-    n_distinct(rhizo_enriched_pathogen$pathogen_species), "\n")
+    n_distinct(rhizo_enriched_pathogen_score$pathogen_species), "\n")
 
-cat("其中匹配到 ARG_MGE_VF_host_score 的数量：",
+cat("匹配到 ARG_MGE_VF_host_score 的数量：",
     sum(!is.na(rhizo_enriched_pathogen_score$ARG_MGE_VF_score)), "\n")
 
-rhizo_pathogen_score_class_summary <- rhizo_enriched_pathogen_score %>%
+# ============================================================
+# 16. 根际富集病原菌 ARG-MGE-VF class 汇总
+# ============================================================
+
+rhizo_pathogen_score_class_summary <- rhizo_enriched_pathogen_score_view %>%
   filter(!is.na(ARG_MGE_VF_score)) %>%
   group_by(ARG_MGE_VF_class) %>%
   summarise(
     n_pathogen_species = n_distinct(pathogen_species),
     mean_score = mean(ARG_MGE_VF_score, na.rm = TRUE),
     median_score = median(ARG_MGE_VF_score, na.rm = TRUE),
+    mean_risk_weighted_ARG_host_score = mean(risk_weighted_ARG_host_score, na.rm = TRUE),
+    mean_risk_weighted_ARG_abun = mean(risk_weighted_ARG_abun, na.rm = TRUE),
     mean_ARG_contig_ratio = mean(ARG_carrying_contig_ratio, na.rm = TRUE),
     mean_MGE_contig_ratio = mean(MGE_carrying_contig_ratio, na.rm = TRUE),
     mean_VF_contig_ratio = mean(VF_carrying_contig_ratio, na.rm = TRUE),
     mean_ARG_MGE_coloc_ratio = mean(ARG_MGE_coloc_abun_ratio, na.rm = TRUE),
     mean_ARG_VF_coloc_ratio = mean(ARG_VF_coloc_abun_ratio, na.rm = TRUE),
+    mean_MGE_VF_coloc_ratio = mean(MGE_VF_coloc_abun_ratio, na.rm = TRUE),
     mean_ARG_MGE_VF_coloc_ratio = mean(ARG_MGE_VF_coloc_abun_ratio, na.rm = TRUE),
     .groups = "drop"
   ) %>%
@@ -4799,18 +5113,62 @@ rhizo_pathogen_score_class_summary <- rhizo_enriched_pathogen_score %>%
 
 write_csv(
   rhizo_pathogen_score_class_summary,
-  file.path(output_patho_score, "rhizosphere_enriched_pathogens_ARG_MGE_VF_class_summary.csv")
+  file.path(
+    output_patho_score,
+    "rhizosphere_enriched_pathogens_ARG_MGE_VF_class_summary.csv"
+  )
 )
 
-print(rhizo_pathogen_score_class_summary)
+print(rhizo_pathogen_score_class_summary, n = Inf, width = Inf)
 
 # ============================================================
-# 13. 合并 contig 层面的 ARG 携带状态
+# 17. 按 Host 来源汇总 ARG-MGE-VF 风险分类
 # ============================================================
 
+rhizo_pathogen_host_class_summary <- rhizo_enriched_pathogen_score_view %>%
+  filter(!is.na(ARG_MGE_VF_score)) %>%
+  mutate(
+    Host = replace_na(Host, "Unknown")
+  ) %>%
+  group_by(Host, ARG_MGE_VF_class) %>%
+  summarise(
+    n_pathogen_species = n_distinct(pathogen_species),
+    mean_score = mean(ARG_MGE_VF_score, na.rm = TRUE),
+    median_score = median(ARG_MGE_VF_score, na.rm = TRUE),
+    mean_ARG_contig_ratio = mean(ARG_carrying_contig_ratio, na.rm = TRUE),
+    mean_MGE_contig_ratio = mean(MGE_carrying_contig_ratio, na.rm = TRUE),
+    mean_VF_contig_ratio = mean(VF_carrying_contig_ratio, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(Host, desc(mean_score))
+
+write_csv(
+  rhizo_pathogen_host_class_summary,
+  file.path(
+    output_patho_score,
+    "rhizosphere_enriched_pathogens_ARG_MGE_VF_class_by_Host.csv"
+  )
+)
+
+print(rhizo_pathogen_host_class_summary, n = Inf, width = Inf)
+
+# ============================================================
+# 18. 合并 contig 层面 ARG 携带状态
+# rhizo_pathogen_species_ARG_summary 来自前面的 contig ARG-host 分析
+# ============================================================
+#rhizo_pathogen_species_ARG_summary = read_csv("output/pathogen_ARG_host_contig/rhizosphere_enriched_pathogen_ARG_summary_by_species_corrected.csv")
 rhizo_pathogen_ARG_status <- rhizo_pathogen_species_ARG_summary %>%
+  mutate(
+    pathogen_species = as.character(pathogen_species),
+    pathogen_species_clean = pathogen_species %>%
+      str_replace(".*\\|", "") %>%
+      str_replace_all("^s__", "") %>%
+      str_replace_all("_", " ") %>%
+      str_squish() %>%
+      str_to_lower()
+  ) %>%
   dplyr::select(
-    pathogen_species,
+    pathogen_species_clean,
     n_contig,
     n_ARG_contig,
     has_any_ARG,
@@ -4821,34 +5179,44 @@ rhizo_pathogen_ARG_status <- rhizo_pathogen_species_ARG_summary %>%
     ARG_ranks,
     ARG_mechanisms
   ) %>%
+  distinct(pathogen_species_clean, .keep_all = TRUE)
+
+rhizo_enriched_pathogen_score_ARG <- rhizo_enriched_pathogen_score %>%
   mutate(
     pathogen_species_clean = pathogen_species %>%
+      str_replace(".*\\|", "") %>%
+      str_replace_all("^s__", "") %>%
       str_replace_all("_", " ") %>%
       str_squish() %>%
       str_to_lower()
-  )
-
-rhizo_enriched_pathogen_score_ARG <- rhizo_enriched_pathogen_score %>%
+  ) %>%
   left_join(
     rhizo_pathogen_ARG_status,
-    by = "pathogen_species_clean",
-    suffix = c("", "_contig")
+    by = "pathogen_species_clean"
   ) %>%
   mutate(
     has_any_ARG = if_else(is.na(has_any_ARG), FALSE, has_any_ARG),
     n_contig = replace_na(n_contig, 0L),
     n_ARG_contig = replace_na(n_ARG_contig, 0L),
     n_ARG_type = replace_na(n_ARG_type, 0L),
-    n_ARG_subtype = replace_na(n_ARG_subtype, 0L)
+    n_ARG_subtype = replace_na(n_ARG_subtype, 0L),
+    ARG_types = replace_na(ARG_types, ""),
+    ARG_subtypes = replace_na(ARG_subtypes, ""),
+    ARG_ranks = replace_na(ARG_ranks, ""),
+    ARG_mechanisms = replace_na(ARG_mechanisms, "")
   ) %>%
-  arrange(desc(has_any_ARG), desc(ARG_MGE_VF_score), desc(LDA))
+  arrange(desc(has_any_ARG), desc(ARG_MGE_VF_score), desc(LDA)) %>%
+  as_tibble()
 
 write_csv(
   rhizo_enriched_pathogen_score_ARG,
-  file.path(output_patho_score, "rhizosphere_enriched_pathogens_score_class_ARG_status.csv")
+  file.path(
+    output_patho_score,
+    "rhizosphere_enriched_pathogens_score_class_ARG_status.csv"
+  )
 )
 
-rhizo_enriched_pathogen_score_ARG %>%
+rhizo_enriched_pathogen_score_ARG_view <- rhizo_enriched_pathogen_score_ARG %>%
   dplyr::select(
     pathogen_species,
     Host,
@@ -4868,18 +5236,86 @@ rhizo_enriched_pathogen_score_ARG %>%
     n_ARG_type,
     n_ARG_subtype,
     ARG_types,
-    ARG_ranks
+    ARG_subtypes,
+    ARG_ranks,
+    ARG_mechanisms
   ) %>%
-  print(n = Inf)
+  as_tibble()
+
+write_csv(
+  rhizo_enriched_pathogen_score_ARG_view,
+  file.path(
+    output_patho_score,
+    "rhizosphere_enriched_pathogens_score_class_ARG_status_view.csv"
+  )
+)
+
+print(
+  rhizo_enriched_pathogen_score_ARG_view %>%
+    slice_head(n = 40),
+  n = 40,
+  width = Inf
+)
 
 # ============================================================
-# 14. 绘图：根际富集病原菌 score/class/ARG status
+# 19. 合并后的总体汇总
 # ============================================================
 
-class_cols <- c(
+rhizo_pathogen_score_ARG_summary <- rhizo_enriched_pathogen_score_ARG %>%
+  summarise(
+    n_rhizo_enriched_pathogen = n_distinct(pathogen_species),
+    n_matched_score = sum(!is.na(ARG_MGE_VF_score)),
+    n_with_contig_ARG = sum(has_any_ARG, na.rm = TRUE),
+    percent_with_contig_ARG = n_with_contig_ARG / n_rhizo_enriched_pathogen * 100,
+    mean_ARG_MGE_VF_score = mean(ARG_MGE_VF_score, na.rm = TRUE),
+    median_ARG_MGE_VF_score = median(ARG_MGE_VF_score, na.rm = TRUE),
+    max_ARG_MGE_VF_score = max(ARG_MGE_VF_score, na.rm = TRUE)
+  )
+
+write_csv(
+  rhizo_pathogen_score_ARG_summary,
+  file.path(
+    output_patho_score,
+    "rhizosphere_enriched_pathogens_score_ARG_overall_summary.csv"
+  )
+)
+
+print(rhizo_pathogen_score_ARG_summary)
+
+rhizo_pathogen_score_ARG_class_summary <- rhizo_enriched_pathogen_score_ARG %>%
+  filter(!is.na(ARG_MGE_VF_class)) %>%
+  group_by(ARG_MGE_VF_class) %>%
+  summarise(
+    n_pathogen_species = n_distinct(pathogen_species),
+    n_species_with_ARG_contig = sum(has_any_ARG, na.rm = TRUE),
+    percent_species_with_ARG_contig = n_species_with_ARG_contig /
+      n_pathogen_species * 100,
+    mean_score = mean(ARG_MGE_VF_score, na.rm = TRUE),
+    median_score = median(ARG_MGE_VF_score, na.rm = TRUE),
+    mean_n_ARG_contig = mean(n_ARG_contig, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_score))
+
+write_csv(
+  rhizo_pathogen_score_ARG_class_summary,
+  file.path(
+    output_patho_score,
+    "rhizosphere_enriched_pathogens_score_ARG_summary_by_class.csv"
+  )
+)
+
+print(rhizo_pathogen_score_ARG_class_summary, n = Inf, width = Inf)
+
+# ============================================================
+# 20. 绘图：根际富集病原菌 integrated score + class + ARG status
+# ============================================================
+
+class_cols_base <- c(
   "Non-ARG host" = "grey80",
   "Low ARG host" = "#91D1C2",
   "Moderate ARG host" = "#F7C530",
+  "High-burden-diverse ARG host" = "#F39B7F",
   "High-burden/diverse ARG host" = "#F39B7F",
   "High-risk ARG host" = "#DC0000"
 )
@@ -4887,21 +5323,23 @@ class_cols <- c(
 plot_score_df <- rhizo_enriched_pathogen_score_ARG %>%
   filter(!is.na(ARG_MGE_VF_score)) %>%
   mutate(
+    pathogen_species = str_replace(pathogen_species, ".*\\|", ""),
     pathogen_species = factor(
       pathogen_species,
       levels = pathogen_species[order(ARG_MGE_VF_score)]
     ),
-    ARG_MGE_VF_class = factor(
-      ARG_MGE_VF_class,
-      levels = c(
-        "Non-ARG host",
-        "Low ARG host",
-        "Moderate ARG host",
-        "High-burden/diverse ARG host",
-        "High-risk ARG host"
-      )
-    )
+    ARG_MGE_VF_class = as.character(ARG_MGE_VF_class)
   )
+
+extra_class <- setdiff(
+  unique(plot_score_df$ARG_MGE_VF_class),
+  names(class_cols_base)
+)
+
+class_cols <- c(
+  class_cols_base,
+  setNames(rep("#B09C85", length(extra_class)), extra_class)
+)
 
 p_rhizo_pathogen_score <- ggplot(
   plot_score_df,
@@ -4931,26 +5369,457 @@ p_rhizo_pathogen_score <- ggplot(
   theme_bw() +
   theme(
     panel.grid = element_blank(),
-    axis.text.y = element_text(face = "italic", size = 9),
+    axis.text.y = element_text(face = "italic", size = 8),
     legend.position = "right"
   )
 
 ggsave(
-  file.path(output_patho_score, "rhizosphere_enriched_pathogens_integrated_score_class_ARG_status.pdf"),
+  file.path(
+    output_patho_score,
+    "rhizosphere_enriched_pathogens_integrated_score_class_ARG_status.pdf"
+  ),
   p_rhizo_pathogen_score,
   width = 9,
-  height = 6,
+  height = 7,
   device = cairo_pdf
 )
 
 ggsave(
-  file.path(output_patho_score, "rhizosphere_enriched_pathogens_integrated_score_class_ARG_status.png"),
+  file.path(
+    output_patho_score,
+    "rhizosphere_enriched_pathogens_integrated_score_class_ARG_status.png"
+  ),
   p_rhizo_pathogen_score,
   width = 9,
-  height = 6,
+  height = 7,
+  dpi = 300
+)
+
+# ============================================================
+# 21. 绘图：根际富集病原菌风险分类组成
+# ============================================================
+
+p_rhizo_pathogen_class <- rhizo_enriched_pathogen_score_ARG %>%
+  filter(!is.na(ARG_MGE_VF_class)) %>%
+  count(ARG_MGE_VF_class, has_any_ARG) %>%
+  mutate(
+    ARG_MGE_VF_class = factor(
+      ARG_MGE_VF_class,
+      levels = c(
+        "Non-ARG host",
+        "Low ARG host",
+        "Moderate ARG host",
+        "High-burden-diverse ARG host",
+        "High-burden/diverse ARG host",
+        "High-risk ARG host"
+      )
+    )
+  ) %>%
+  ggplot(
+    aes(
+      x = ARG_MGE_VF_class,
+      y = n,
+      fill = has_any_ARG
+    )
+  ) +
+  geom_col(width = 0.7) +
+  scale_fill_manual(
+    values = c("TRUE" = "#E64B35", "FALSE" = "grey80"),
+    labels = c("FALSE" = "No ARG contig", "TRUE" = "ARG-carrying contig")
+  ) +
+  labs(
+    x = "",
+    y = "Number of rhizosphere-enriched pathogens",
+    fill = "Contig-level ARG"
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "top"
+  )
+
+ggsave(
+  file.path(
+    output_patho_score,
+    "rhizosphere_enriched_pathogens_ARG_MGE_VF_class_composition_ARG_status.pdf"
+  ),
+  p_rhizo_pathogen_class,
+  width = 7,
+  height = 5,
+  device = cairo_pdf
+)
+
+ggsave(
+  file.path(
+    output_patho_score,
+    "rhizosphere_enriched_pathogens_ARG_MGE_VF_class_composition_ARG_status.png"
+  ),
+  p_rhizo_pathogen_class,
+  width = 7,
+  height = 5,
+  dpi = 300
+)
+
+# ============================================================
+# 22. 绘图：Top 30 根际富集病原菌综合风险表
+# ============================================================
+
+top30_rhizo_pathogen_score <- rhizo_enriched_pathogen_score_ARG %>%
+  filter(!is.na(ARG_MGE_VF_score)) %>%
+  arrange(desc(ARG_MGE_VF_score)) %>%
+  slice_head(n = 30) %>%
+  mutate(
+    pathogen_species = str_replace(pathogen_species, ".*\\|", ""),
+    pathogen_species = factor(
+      pathogen_species,
+      levels = rev(pathogen_species)
+    ),
+    ARG_MGE_VF_class = as.character(ARG_MGE_VF_class)
+  )
+
+p_top30_score <- ggplot(
+  top30_rhizo_pathogen_score,
+  aes(
+    x = ARG_MGE_VF_score,
+    y = pathogen_species,
+    fill = ARG_MGE_VF_class
+  )
+) +
+  geom_col(width = 0.75) +
+  geom_point(
+    aes(
+      size = n_ARG_contig,
+      shape = has_any_ARG
+    ),
+    color = "black"
+  ) +
+  scale_fill_manual(values = class_cols, drop = FALSE) +
+  scale_shape_manual(
+    values = c("TRUE" = 21, "FALSE" = 4)
+  ) +
+  scale_size_continuous(range = c(2, 6)) +
+  labs(
+    x = "Integrated ARG-MGE-VF host score",
+    y = "",
+    fill = "Integrated host class",
+    shape = "Contig-level ARG",
+    size = "ARG-carrying contigs"
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.y = element_text(face = "italic", size = 8),
+    legend.position = "right"
+  )
+
+ggsave(
+  file.path(
+    output_patho_score,
+    "top30_rhizosphere_enriched_pathogens_integrated_score_ARG_status.pdf"
+  ),
+  p_top30_score,
+  width = 9,
+  height = 7,
+  device = cairo_pdf
+)
+
+ggsave(
+  file.path(
+    output_patho_score,
+    "top30_rhizosphere_enriched_pathogens_integrated_score_ARG_status.png"
+  ),
+  p_top30_score,
+  width = 9,
+  height = 7,
   dpi = 300
 )
 
 
+# ============================================================
+# 风险分类组成图：Non-ARG host 强制显示为 No ARG contig
+# ============================================================
+
+class_levels_use <- c(
+  "Non-ARG host",
+  "Low ARG host",
+  "Moderate ARG host",
+  "High-burden/diverse ARG host",
+  "High-risk ARG host"
+)
+
+plot_class_df <- rhizo_enriched_pathogen_score_ARG %>%
+  mutate(
+    ARG_MGE_VF_class = as.character(ARG_MGE_VF_class),
+    ARG_MGE_VF_class = str_squish(ARG_MGE_VF_class),
+    
+    ARG_MGE_VF_class_plot = case_when(
+      is.na(ARG_MGE_VF_class) | ARG_MGE_VF_class == "" ~
+        "Non-ARG host",
+      
+      ARG_MGE_VF_class %in% c(
+        "Non-ARG host",
+        "Non ARG host",
+        "Non_ARG host"
+      ) ~ "Non-ARG host",
+      
+      ARG_MGE_VF_class %in% c(
+        "Low ARG host",
+        "Low-ARG host"
+      ) ~ "Low ARG host",
+      
+      ARG_MGE_VF_class %in% c(
+        "Moderate ARG host",
+        "Moderate-ARG host"
+      ) ~ "Moderate ARG host",
+      
+      ARG_MGE_VF_class %in% c(
+        "High-burden-diverse ARG host",
+        "High-burden/diverse ARG host",
+        "High burden diverse ARG host",
+        "High-burden diverse ARG host"
+      ) ~ "High-burden/diverse ARG host",
+      
+      ARG_MGE_VF_class %in% c(
+        "High-risk ARG host",
+        "High risk ARG host",
+        "High-risk host"
+      ) ~ "High-risk ARG host",
+      
+      TRUE ~ "Non-ARG host"
+    ),
+    
+    ARG_MGE_VF_class_plot = factor(
+      ARG_MGE_VF_class_plot,
+      levels = class_levels_use
+    ),
+    
+    has_any_ARG = if_else(
+      is.na(has_any_ARG),
+      FALSE,
+      has_any_ARG
+    ),
+    
+    # 关键修改：
+    # Non-ARG host 强制归为 No ARG contig
+    has_any_ARG_plot = case_when(
+      ARG_MGE_VF_class_plot == "Non-ARG host" ~ FALSE,
+      TRUE ~ has_any_ARG
+    )
+  ) %>%
+  count(ARG_MGE_VF_class_plot, has_any_ARG_plot)
+
+write_csv(
+  plot_class_df,
+  file.path(
+    output_patho_score,
+    "rhizosphere_enriched_pathogens_class_composition_Non_ARG_forced_grey.csv"
+  )
+)
+
+p_rhizo_pathogen_class <- ggplot(
+  plot_class_df,
+  aes(
+    x = ARG_MGE_VF_class_plot,
+    y = n,
+    fill = has_any_ARG_plot
+  )
+) +
+  geom_col(width = 0.7) +
+  scale_fill_manual(
+    values = c(
+      "FALSE" = "grey80",
+      "TRUE" = "#E64B35"
+    ),
+    labels = c(
+      "FALSE" = "No ARG contig",
+      "TRUE" = "ARG-carrying contig"
+    )
+  ) +
+  labs(
+    x = "",
+    y = "Number of rhizosphere-enriched pathogens",
+    fill = "Contig-level ARG"
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "top"
+  )
+
+ggsave(
+  file.path(
+    output_patho_score,
+    "rhizosphere_enriched_pathogens_ARG_MGE_VF_class_composition_Non_ARG_forced_grey.pdf"
+  ),
+  p_rhizo_pathogen_class,
+  width = 7,
+  height = 5,
+  device = cairo_pdf
+)
+
+ggsave(
+  file.path(
+    output_patho_score,
+    "rhizosphere_enriched_pathogens_ARG_MGE_VF_class_composition_Non_ARG_forced_grey.png"
+  ),
+  p_rhizo_pathogen_class,
+  width = 7,
+  height = 5,
+  dpi = 300
+)
+# ============================================================
+# 综合得分图中也将 NA 合并到 Non-ARG host
+# ============================================================
+
+plot_score_df <- rhizo_enriched_pathogen_score_ARG %>%
+  mutate(
+    pathogen_species = str_replace(pathogen_species, ".*\\|", ""),
+    
+    ARG_MGE_VF_class = as.character(ARG_MGE_VF_class),
+    ARG_MGE_VF_class = str_squish(ARG_MGE_VF_class),
+    
+    ARG_MGE_VF_class_plot = case_when(
+      is.na(ARG_MGE_VF_class) | ARG_MGE_VF_class == "" ~
+        "Non-ARG host",
+      
+      ARG_MGE_VF_class %in% c(
+        "Non-ARG host",
+        "Non ARG host",
+        "Non_ARG host"
+      ) ~ "Non-ARG host",
+      
+      ARG_MGE_VF_class %in% c(
+        "Low ARG host",
+        "Low-ARG host"
+      ) ~ "Low ARG host",
+      
+      ARG_MGE_VF_class %in% c(
+        "Moderate ARG host",
+        "Moderate-ARG host"
+      ) ~ "Moderate ARG host",
+      
+      ARG_MGE_VF_class %in% c(
+        "High-burden-diverse ARG host",
+        "High-burden/diverse ARG host",
+        "High burden diverse ARG host",
+        "High-burden diverse ARG host"
+      ) ~ "High-burden/diverse ARG host",
+      
+      ARG_MGE_VF_class %in% c(
+        "High-risk ARG host",
+        "High risk ARG host",
+        "High-risk host"
+      ) ~ "High-risk ARG host",
+      
+      TRUE ~ "Non-ARG host"
+    ),
+    
+    ARG_MGE_VF_class_plot = factor(
+      ARG_MGE_VF_class_plot,
+      levels = class_levels_use
+    ),
+    
+    has_any_ARG = if_else(is.na(has_any_ARG), FALSE, has_any_ARG),
+    
+    # 没匹配到 score 的 Non-ARG host，score 设为 0，方便画图
+    ARG_MGE_VF_score_plot = replace_na(ARG_MGE_VF_score, 0),
+    
+    pathogen_species = factor(
+      pathogen_species,
+      levels = pathogen_species[order(ARG_MGE_VF_score_plot)]
+    )
+  )
+
+p_rhizo_pathogen_score <- ggplot(
+  plot_score_df,
+  aes(
+    x = ARG_MGE_VF_score_plot,
+    y = pathogen_species,
+    fill = ARG_MGE_VF_class_plot
+  )
+) +
+  geom_col(width = 0.75) +
+  geom_point(
+    aes(shape = has_any_ARG),
+    size = 2.8,
+    color = "black"
+  ) +
+  scale_fill_manual(values = class_cols, drop = FALSE) +
+  scale_shape_manual(
+    values = c("TRUE" = 21, "FALSE" = 4),
+    labels = c(
+      "FALSE" = "No ARG contig",
+      "TRUE" = "ARG-carrying contig"
+    )
+  ) +
+  labs(
+    x = "Integrated ARG-MGE-VF host score",
+    y = "",
+    fill = "Integrated host class",
+    shape = "Contig-level ARG"
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.y = element_text(face = "italic", size = 8),
+    legend.position = "right"
+  )
+
+ggsave(
+  file.path(
+    output_patho_score,
+    "rhizosphere_enriched_pathogens_integrated_score_class_ARG_status_NA_as_Non_ARG_host.pdf"
+  ),
+  p_rhizo_pathogen_score,
+  width = 9,
+  height = 7,
+  device = cairo_pdf
+)
+
+ggsave(
+  file.path(
+    output_patho_score,
+    "rhizosphere_enriched_pathogens_integrated_score_class_ARG_status_NA_as_Non_ARG_host.png"
+  ),
+  p_rhizo_pathogen_score,
+  width = 9,
+  height = 7,
+  dpi = 300
+)
+
+# ============================================================
+# 23. 输出完成提示
+# ============================================================
+
+cat("Pathogen ARG-MGE-VF host score and ARG status analysis finished.\n")
+cat("Output:", output_patho_score, "\n")
+
+cat("重点查看文件：\n")
+cat(file.path(output_patho_score, "rhizosphere_enriched_pathogens_ARG_MGE_VF_score_view.csv"), "\n")
+cat(file.path(output_patho_score, "rhizosphere_enriched_pathogens_score_class_ARG_status.csv"), "\n")
+cat(file.path(output_patho_score, "rhizosphere_enriched_pathogens_score_class_ARG_status_view.csv"), "\n")
+cat(file.path(output_patho_score, "rhizosphere_enriched_pathogens_score_ARG_overall_summary.csv"), "\n")
+cat(file.path(output_patho_score, "rhizosphere_enriched_pathogens_score_ARG_summary_by_class.csv"), "\n")
+cat(file.path(output_patho_score, "rhizosphere_enriched_pathogens_integrated_score_class_ARG_status.pdf"), "\n")
+cat(file.path(output_patho_score, "top30_rhizosphere_enriched_pathogens_integrated_score_ARG_status.pdf"), "\n")
+
+rhizosphere_enriched_pathogens_score_class_ARG_status_view.csv
+
+pathogen_species
+ARG_MGE_VF_score
+ARG_MGE_VF_class
+High_risk_ARG_evidence_strict
+MGE_species_level_evidence
+VF_species_level_evidence
+has_any_ARG
+n_ARG_contig
+n_ARG_type
+n_ARG_subtype
+ARG_types
+ARG_ranks
+
 
 rhizosphere_enriched_pathogens_score_class_ARG_status.csv
+ARG_MGE_VF_host_score_use_clean_with_match_key.csv   所有species的分类
