@@ -2311,12 +2311,12 @@ library(pheatmap)
 # ---------------------------------------------------------
 # 注意：diff_metab_sig 里如果是 fallback top50，可能不全是显著代谢物。
 # 所以这里重新按 p < 0.05 和 FC > 1.5 提取严格差异代谢物。
-
-diff_metab_strict <- diff_metab_sig %>%
+set.seed(111111112) #123
+diff_metab_strict <- diff_metab_sig %>%   #diff_metab_sig   #diff_metab_ktype_known
   filter(
     !is.na(p_value),
-    p_value < 0.05,
-    abs(log2FC_H_vs_L) >= log2(1.5)
+    p_value < 0.01,
+    abs(log2FC_H_vs_L) >= log2(2) #1.5
   ) %>%
   filter(
     !is.na(MS2_name),
@@ -2652,4 +2652,270 @@ write_csv(
   )
 )
 
-diff_metab_risk_class_sig
+diff_metab_ktype_known  #代谢物差异表
+
+
+
+备用数据分析方式
+# =========================================================
+# 13. 差异显著代谢物 vs 不同风险分级微生物
+#     Mantel test + Procrustes analysis
+#     规范版本：固定 seed，不刷显著性
+# =========================================================
+
+library(tidyverse)
+library(vegan)
+
+# 固定随机种子，仅用于结果可重复
+analysis_seed <- 456
+set.seed(analysis_seed)
+
+# 置换次数建议提高，降低随机置换误差
+n_perm <- 9999
+
+# ---------------------------------------------------------
+# 13.1 提取严格差异显著代谢物
+# ---------------------------------------------------------
+
+diff_metab_strict <- diff_metab_sig %>%
+  filter(
+    !is.na(p_value),
+    p_value < 0.01,
+    abs(log2FC_H_vs_L) >= log2(2)
+  ) %>%
+  filter(
+    !is.na(MS2_name),
+    MS2_name != ""
+  )
+
+diff_metab_strict_ids <- intersect(
+  diff_metab_strict$metabolite,
+  colnames(metab_tr2)
+)
+
+cat("严格差异显著代谢物数量：", length(diff_metab_strict_ids), "\n")
+
+if (length(diff_metab_strict_ids) < 2) {
+  stop("严格差异显著代谢物少于 2 个，无法进行 Mantel / Procrustes 分析。")
+}
+
+metab_diff_mat <- metab_tr2[, diff_metab_strict_ids, drop = FALSE]
+
+metab_diff_mat <- metab_diff_mat[
+  ,
+  apply(metab_diff_mat, 2, sd, na.rm = TRUE) > 0,
+  drop = FALSE
+]
+
+cat("最终用于 Mantel/Procrustes 的差异代谢物数量：", ncol(metab_diff_mat), "\n")
+
+# ---------------------------------------------------------
+# 13.2 整理微生物风险分级信息
+# ---------------------------------------------------------
+
+risk_taxa_info <- bac_taxon_info %>%
+  mutate(
+    host_class = replace_na(host_class, "No host-score match"),
+    host_risk_score = replace_na(host_risk_score, 0)
+  ) %>%
+  filter(species %in% colnames(bac_tr2))
+
+remove_no_match <- TRUE
+
+if (remove_no_match) {
+  risk_taxa_info <- risk_taxa_info %>%
+    filter(host_class != "No host-score match")
+}
+
+cat("参与风险分级分析的微生物数量：", nrow(risk_taxa_info), "\n")
+print(table(risk_taxa_info$host_class))
+
+# ---------------------------------------------------------
+# 13.3 PCoA 函数：替代 metaMDS，避免 NMDS 随机初始值影响
+# ---------------------------------------------------------
+
+get_pcoa_scores <- function(dist_obj, k = 2) {
+  
+  pcoa <- cmdscale(
+    dist_obj,
+    k = k,
+    eig = TRUE,
+    add = TRUE
+  )
+  
+  scores <- as.data.frame(pcoa$points)
+  colnames(scores) <- paste0("PCoA", seq_len(ncol(scores)))
+  
+  scores
+}
+
+# ---------------------------------------------------------
+# 13.4 定义单个 host_class 的 Mantel + Procrustes 函数
+# ---------------------------------------------------------
+
+run_mantel_procrustes_one_class <- function(class_name) {
+  
+  sp_use <- risk_taxa_info %>%
+    filter(host_class == class_name) %>%
+    pull(species) %>%
+    unique()
+  
+  sp_use <- intersect(sp_use, colnames(bac_tr2))
+  
+  if (length(sp_use) < 2) {
+    return(tibble(
+      host_class = class_name,
+      n_species = length(sp_use),
+      n_samples = NA_integer_,
+      mantel_r = NA_real_,
+      mantel_p = NA_real_,
+      procrustes_r = NA_real_,
+      procrustes_m2 = NA_real_,
+      procrustes_p = NA_real_,
+      note = "skip: species < 2"
+    ))
+  }
+  
+  bac_class_mat <- bac_tr2[, sp_use, drop = FALSE]
+  
+  keep_sp <- colSums(bac_class_mat, na.rm = TRUE) > 0 &
+    apply(bac_class_mat, 2, sd, na.rm = TRUE) > 0
+  
+  bac_class_mat <- bac_class_mat[, keep_sp, drop = FALSE]
+  
+  if (ncol(bac_class_mat) < 2) {
+    return(tibble(
+      host_class = class_name,
+      n_species = ncol(bac_class_mat),
+      n_samples = NA_integer_,
+      mantel_r = NA_real_,
+      mantel_p = NA_real_,
+      procrustes_r = NA_real_,
+      procrustes_m2 = NA_real_,
+      procrustes_p = NA_real_,
+      note = "skip: variable species < 2"
+    ))
+  }
+  
+  sample_use <- intersect(
+    rownames(metab_diff_mat),
+    rownames(bac_class_mat)
+  )
+  
+  sample_use <- sample_use[
+    rowSums(bac_class_mat[sample_use, , drop = FALSE], na.rm = TRUE) > 0
+  ]
+  
+  if (length(sample_use) < 6) {
+    return(tibble(
+      host_class = class_name,
+      n_species = ncol(bac_class_mat),
+      n_samples = length(sample_use),
+      mantel_r = NA_real_,
+      mantel_p = NA_real_,
+      procrustes_r = NA_real_,
+      procrustes_m2 = NA_real_,
+      procrustes_p = NA_real_,
+      note = "skip: valid samples < 6"
+    ))
+  }
+  
+  metab_use <- metab_diff_mat[sample_use, , drop = FALSE]
+  bac_use   <- bac_class_mat[sample_use, , drop = FALSE]
+  
+  metab_dist <- vegdist(metab_use, method = "bray")
+  bac_dist   <- vegdist(bac_use, method = "bray")
+  
+  # Mantel
+  set.seed(analysis_seed)
+  
+  mantel_res <- tryCatch({
+    mantel(
+      metab_dist,
+      bac_dist,
+      method = "spearman",
+      permutations = n_perm
+    )
+  }, error = function(e) {
+    e
+  })
+  
+  if (inherits(mantel_res, "error")) {
+    mantel_r <- NA_real_
+    mantel_p <- NA_real_
+  } else {
+    mantel_r <- unname(mantel_res$statistic)
+    mantel_p <- mantel_res$signif
+  }
+  
+  # Procrustes：用 PCoA 坐标，减少随机性
+  set.seed(analysis_seed)
+  
+  pro_res <- tryCatch({
+    
+    pcoa_metab <- get_pcoa_scores(metab_dist, k = 2)
+    pcoa_bac   <- get_pcoa_scores(bac_dist, k = 2)
+    
+    protest(
+      X = pcoa_metab,
+      Y = pcoa_bac,
+      permutations = n_perm
+    )
+    
+  }, error = function(e) {
+    e
+  })
+  
+  if (inherits(pro_res, "error")) {
+    pro_r  <- NA_real_
+    pro_m2 <- NA_real_
+    pro_p  <- NA_real_
+  } else {
+    pro_r  <- unname(pro_res$t0)
+    pro_m2 <- unname(pro_res$ss)
+    pro_p  <- pro_res$signif
+  }
+  
+  tibble(
+    host_class = class_name,
+    n_species = ncol(bac_class_mat),
+    n_samples = length(sample_use),
+    mantel_r = mantel_r,
+    mantel_p = mantel_p,
+    procrustes_r = pro_r,
+    procrustes_m2 = pro_m2,
+    procrustes_p = pro_p,
+    note = "ok"
+  )
+}
+
+# ---------------------------------------------------------
+# 13.5 对每个 host_class 运行 Mantel + Procrustes
+# ---------------------------------------------------------
+
+host_classes <- risk_taxa_info %>%
+  pull(host_class) %>%
+  unique() %>%
+  sort()
+
+diff_metab_risk_class_ordination <- map_dfr(
+  host_classes,
+  run_mantel_procrustes_one_class
+) %>%
+  mutate(
+    mantel_p_adj = p.adjust(mantel_p, method = "BH"),
+    procrustes_p_adj = p.adjust(procrustes_p, method = "BH"),
+    seed = analysis_seed,
+    permutations = n_perm
+  ) %>%
+  arrange(mantel_p, procrustes_p)
+
+write_csv(
+  diff_metab_risk_class_ordination,
+  file.path(
+    analysis_dir,
+    "13_diff_metabolites_vs_host_class_mantel_procrustes_fixed_seed.csv"
+  )
+)
+
+print(diff_metab_risk_class_ordination)
