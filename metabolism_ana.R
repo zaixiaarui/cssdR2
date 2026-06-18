@@ -2311,7 +2311,7 @@ library(pheatmap)
 # ---------------------------------------------------------
 # 注意：diff_metab_sig 里如果是 fallback top50，可能不全是显著代谢物。
 # 所以这里重新按 p < 0.05 和 FC > 1.5 提取严格差异代谢物。
-set.seed(111111112) #123
+set.seed(123) #123
 diff_metab_strict <- diff_metab_sig %>%   #diff_metab_sig   #diff_metab_ktype_known
   filter(
     !is.na(p_value),
@@ -2667,7 +2667,7 @@ library(tidyverse)
 library(vegan)
 
 # 固定随机种子，仅用于结果可重复
-analysis_seed <- 456
+analysis_seed <- 123
 set.seed(analysis_seed)
 
 # 置换次数建议提高，降低随机置换误差
@@ -2919,3 +2919,553 @@ write_csv(
 )
 
 print(diff_metab_risk_class_ordination)
+
+
+# =========================================================
+# 14. 差异代谢物与中高风险 ARG host 的方向性相关分析
+#     目标 host_class:
+#     Moderate ARG host
+#     Virulent ARG host
+#     High-burden/diverse ARG host
+# =========================================================
+
+library(tidyverse)
+library(pheatmap)
+library(ggpubr)
+
+# ---------------------------------------------------------
+# 14.0 目标 host_class
+# ---------------------------------------------------------
+
+target_host_classes <- c(
+  "Moderate ARG host",
+  "Virulent ARG host",
+  "High-burden/diverse ARG host"
+)
+
+# 检查 metab_diff_mat
+cat("当前差异代谢物数量：", ncol(metab_diff_mat), "\n")
+print(colnames(metab_diff_mat))
+
+# ---------------------------------------------------------
+# 14.1 整理目标微生物注释
+# ---------------------------------------------------------
+
+target_risk_taxa_info <- bac_taxon_info %>%
+  mutate(
+    host_class = replace_na(host_class, "No host-score match"),
+    host_risk_score = replace_na(host_risk_score, 0)
+  ) %>%
+  filter(
+    species %in% colnames(bac_rel2),
+    host_class %in% target_host_classes
+  )
+
+cat("目标风险等级微生物数量：\n")
+print(table(target_risk_taxa_info$host_class))
+
+if (nrow(target_risk_taxa_info) == 0) {
+  stop("没有筛选到目标 host_class 的微生物，请检查 host_class 名称是否一致。")
+}
+
+# ---------------------------------------------------------
+# 14.2 构建每个样本中不同 host_class 的总相对丰度
+# ---------------------------------------------------------
+
+target_host_class_abun <- as.data.frame(bac_rel2, check.names = FALSE) %>%
+  rownames_to_column("sample") %>%
+  pivot_longer(
+    cols = -sample,
+    names_to = "species",
+    values_to = "abundance"
+  ) %>%
+  inner_join(
+    target_risk_taxa_info %>%
+      select(species, host_class, host_risk_score),
+    by = "species"
+  ) %>%
+  group_by(sample, host_class) %>%
+  summarise(
+    host_class_abundance = sum(abundance, na.rm = TRUE),
+    host_class_weighted_risk = sum(abundance * host_risk_score, na.rm = TRUE),
+    n_detected_species = sum(abundance > 0, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  complete(
+    sample = rownames(metab_diff_mat),
+    host_class = target_host_classes,
+    fill = list(
+      host_class_abundance = 0,
+      host_class_weighted_risk = 0,
+      n_detected_species = 0
+    )
+  ) %>%
+  arrange(sample, host_class)
+
+write_csv(
+  target_host_class_abun,
+  file.path(
+    analysis_dir,
+    "16_target_host_class_abundance_by_sample.csv"
+  )
+)
+
+# ---------------------------------------------------------
+# 14.3 代谢物 vs host_class 总相对丰度 Spearman 相关
+# ---------------------------------------------------------
+
+metab_hostclass_cor <- map_dfr(colnames(metab_diff_mat), function(met) {
+  
+  map_dfr(target_host_classes, function(cls) {
+    
+    dat <- target_host_class_abun %>%
+      filter(host_class == cls) %>%
+      mutate(
+        metabolite = as.numeric(metab_diff_mat[sample, met]),
+        host_class_abundance_log = log1p(host_class_abundance * 1e6),
+        host_class_weighted_risk_log = log1p(host_class_weighted_risk * 1e6)
+      )
+    
+    # 相关 1：代谢物 vs host_class 总丰度
+    cor_abun <- safe_cor(
+      x = dat$metabolite,
+      y = dat$host_class_abundance_log,
+      method = "spearman"
+    )
+    
+    # 相关 2：代谢物 vs host_class 风险加权丰度
+    cor_risk <- safe_cor(
+      x = dat$metabolite,
+      y = dat$host_class_weighted_risk_log,
+      method = "spearman"
+    )
+    
+    tibble(
+      metabolite = met,
+      host_class = cls,
+      n_samples = nrow(dat),
+      
+      rho_abundance = cor_abun$rho,
+      p_abundance = cor_abun$p_value,
+      
+      rho_weighted_risk = cor_risk$rho,
+      p_weighted_risk = cor_risk$p_value,
+      
+      mean_host_class_abundance = mean(dat$host_class_abundance, na.rm = TRUE),
+      mean_host_class_weighted_risk = mean(dat$host_class_weighted_risk, na.rm = TRUE)
+    )
+  })
+}) %>%
+  group_by(host_class) %>%
+  mutate(
+    p_abundance_adj_within_class = p.adjust(p_abundance, method = "BH"),
+    p_weighted_risk_adj_within_class = p.adjust(p_weighted_risk, method = "BH")
+  ) %>%
+  ungroup() %>%
+  mutate(
+    p_abundance_adj_global = p.adjust(p_abundance, method = "BH"),
+    p_weighted_risk_adj_global = p.adjust(p_weighted_risk, method = "BH")
+  ) %>%
+  left_join(
+    diff_metab_strict %>%
+      select(
+        metabolite,
+        MS2_name,
+        Super.Class,
+        Class,
+        log2FC_H_vs_L,
+        p_value,
+        p_adj,
+        enriched_ktype
+      ),
+    by = "metabolite"
+  ) %>%
+  arrange(host_class, p_abundance, desc(abs(rho_abundance)))
+
+write_csv(
+  metab_hostclass_cor,
+  file.path(
+    analysis_dir,
+    "17_diff_metabolites_vs_target_host_class_abundance_cor.csv"
+  )
+)
+
+print(metab_hostclass_cor)
+
+# ---------------------------------------------------------
+# 14.4 提取正相关和负相关结果
+# ---------------------------------------------------------
+
+metab_hostclass_cor_sig <- metab_hostclass_cor %>%
+  filter(
+    !is.na(rho_abundance),
+    abs(rho_abundance) >= 0.5,
+    p_abundance < 0.05
+  ) %>%
+  arrange(host_class, p_abundance, desc(abs(rho_abundance)))
+
+write_csv(
+  metab_hostclass_cor_sig,
+  file.path(
+    analysis_dir,
+    "18_sig_diff_metabolites_vs_target_host_class_abundance_cor.csv"
+  )
+)
+
+cat("显著相关的 代谢物-host_class 组合数量：", nrow(metab_hostclass_cor_sig), "\n")
+print(metab_hostclass_cor_sig)
+
+# ---------------------------------------------------------
+# 14.5 热图：代谢物 vs 三类风险 host_class 总丰度
+# ---------------------------------------------------------
+
+rho_heat_mat <- metab_hostclass_cor %>%
+  select(metabolite, host_class, rho_abundance) %>%
+  pivot_wider(
+    names_from = host_class,
+    values_from = rho_abundance,
+    values_fill = 0
+  ) %>%
+  column_to_rownames("metabolite") %>%
+  as.matrix()
+
+rho_heat_mat[is.na(rho_heat_mat)] <- 0
+
+# 行名换成 MS2_name
+metab_label_df <- diff_metab_strict %>%
+  select(metabolite, MS2_name) %>%
+  distinct() %>%
+  mutate(
+    label = ifelse(
+      is.na(MS2_name) | MS2_name == "",
+      metabolite,
+      MS2_name
+    ),
+    label = make.unique(label)
+  )
+
+rownames(rho_heat_mat) <- metab_label_df$label[
+  match(rownames(rho_heat_mat), metab_label_df$metabolite)
+]
+
+pdf(
+  file.path(
+    analysis_dir,
+    "19_heatmap_diff_metabolites_vs_target_host_class_abundance_cor.pdf"
+  ),
+  width = 7,
+  height = 7
+)
+
+pheatmap(
+  rho_heat_mat,
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+  display_numbers = TRUE,
+  number_format = "%.2f",
+  color = colorRampPalette(c("#2166AC", "white", "#B2182B"))(100),
+  breaks = seq(-1, 1, length.out = 101),
+  main = "Spearman correlation: metabolites vs target ARG host classes"
+)
+
+dev.off()
+
+# =========================================================
+# 15. 代谢物 vs 目标 host_class 内具体 species 的相关分析
+# =========================================================
+
+# ---------------------------------------------------------
+# 15.1 筛选目标 species
+# ---------------------------------------------------------
+
+target_species <- target_risk_taxa_info %>%
+  pull(species) %>%
+  unique()
+
+target_species <- intersect(target_species, colnames(bac_tr2))
+
+# 至少在 3 个样本中出现
+target_prev <- colMeans(
+  bac_rel2[, target_species, drop = FALSE] > 0,
+  na.rm = TRUE
+)
+
+target_species <- names(target_prev)[
+  target_prev >= 3 / nrow(bac_rel2)
+]
+
+cat("进入 species-level 相关分析的目标微生物数量：", length(target_species), "\n")
+
+if (length(target_species) == 0) {
+  stop("没有符合出现率要求的目标 species。")
+}
+
+# ---------------------------------------------------------
+# 15.2 差异代谢物 × 目标 species Spearman 相关
+# ---------------------------------------------------------
+
+metab_target_species_cor <- map_dfr(colnames(metab_diff_mat), function(met) {
+  
+  map_dfr(target_species, function(sp) {
+    
+    cor_res <- safe_cor(
+      x = metab_diff_mat[, met],
+      y = bac_tr2[rownames(metab_diff_mat), sp],
+      method = "spearman"
+    )
+    
+    tibble(
+      metabolite = met,
+      species = sp
+    ) %>%
+      bind_cols(cor_res)
+  })
+}) %>%
+  left_join(
+    diff_metab_strict %>%
+      select(
+        metabolite,
+        MS2_name,
+        Super.Class,
+        Class,
+        log2FC_H_vs_L,
+        p_value_metab = p_value,
+        p_adj_metab = p_adj,
+        enriched_ktype
+      ),
+    by = "metabolite"
+  ) %>%
+  left_join(
+    target_risk_taxa_info %>%
+      select(
+        species,
+        host_class,
+        host_risk_score,
+        Phylum,
+        Class_tax = Class,
+        Order,
+        Family,
+        Genus
+      ),
+    by = "species"
+  ) %>%
+  group_by(metabolite) %>%
+  mutate(
+    p_adj_within_metabolite = p.adjust(p_value, method = "BH")
+  ) %>%
+  ungroup() %>%
+  group_by(host_class) %>%
+  mutate(
+    p_adj_within_host_class = p.adjust(p_value, method = "BH")
+  ) %>%
+  ungroup() %>%
+  mutate(
+    p_adj_global = p.adjust(p_value, method = "BH"),
+    direction = case_when(
+      rho > 0 ~ "positive",
+      rho < 0 ~ "negative",
+      TRUE ~ "zero"
+    )
+  ) %>%
+  arrange(p_value, desc(abs(rho)))
+
+write_csv(
+  metab_target_species_cor,
+  file.path(
+    analysis_dir,
+    "20_diff_metabolites_vs_target_host_class_species_cor.csv"
+  )
+)
+
+# ---------------------------------------------------------
+# 15.3 筛选显著或候选 species-level 相关
+# ---------------------------------------------------------
+
+metab_target_species_cor_sig <- metab_target_species_cor %>%
+  filter(
+    !is.na(rho),
+    abs(rho) >= 0.6,
+    p_value < 0.05
+  ) %>%
+  arrange(p_value, desc(abs(rho)))
+
+write_csv(
+  metab_target_species_cor_sig,
+  file.path(
+    analysis_dir,
+    "21_sig_diff_metabolites_vs_target_host_class_species_cor.csv"
+  )
+)
+
+cat("显著 species-level 相关数量：", nrow(metab_target_species_cor_sig), "\n")
+
+# 如果严格显著结果少，则输出每个代谢物每个 host_class 相关性最强的前 10 个 species
+metab_target_species_cor_candidate <- metab_target_species_cor %>%
+  filter(!is.na(rho)) %>%
+  group_by(metabolite, host_class) %>%
+  slice_max(
+    order_by = abs(rho),
+    n = 10,
+    with_ties = FALSE
+  ) %>%
+  ungroup() %>%
+  mutate(
+    selection_level = case_when(
+      abs(rho) >= 0.6 & p_value < 0.05 ~ "abs_rho_ge_0.6_and_p_lt_0.05",
+      rho > 0 ~ "top10_positive_or_candidate",
+      rho < 0 ~ "top10_negative_or_candidate",
+      TRUE ~ "top10_candidate"
+    )
+  ) %>%
+  arrange(metabolite, host_class, desc(abs(rho)))
+
+write_csv(
+  metab_target_species_cor_candidate,
+  file.path(
+    analysis_dir,
+    "22_candidate_diff_metabolites_vs_target_host_class_species_cor.csv"
+  )
+)
+
+# ---------------------------------------------------------
+# 15.4 汇总每个代谢物关联到的中高风险 species 数量
+# ---------------------------------------------------------
+
+metab_target_species_summary <- metab_target_species_cor_candidate %>%
+  mutate(
+    is_positive = rho > 0,
+    is_negative = rho < 0
+  ) %>%
+  group_by(metabolite, MS2_name, host_class) %>%
+  summarise(
+    n_species = n(),
+    n_positive_species = sum(is_positive, na.rm = TRUE),
+    n_negative_species = sum(is_negative, na.rm = TRUE),
+    mean_rho = mean(rho, na.rm = TRUE),
+    median_rho = median(rho, na.rm = TRUE),
+    mean_host_risk_score = mean(host_risk_score, na.rm = TRUE),
+    top_positive_species = paste(
+      head(species[order(-rho)], 10),
+      collapse = "; "
+    ),
+    top_negative_species = paste(
+      head(species[order(rho)], 10),
+      collapse = "; "
+    ),
+    .groups = "drop"
+  ) %>%
+  arrange(host_class, desc(n_positive_species), desc(mean_rho))
+
+write_csv(
+  metab_target_species_summary,
+  file.path(
+    analysis_dir,
+    "23_summary_diff_metabolites_vs_target_host_class_species_cor.csv"
+  )
+)
+
+# ---------------------------------------------------------
+# 15.5 热图：代谢物与代表性中高风险 species 的相关性
+# ---------------------------------------------------------
+
+top_species_for_heatmap <- metab_target_species_cor %>%
+  filter(!is.na(rho)) %>%
+  group_by(species) %>%
+  summarise(
+    max_abs_rho = max(abs(rho), na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(max_abs_rho)) %>%
+  slice_head(n = 60) %>%
+  pull(species)
+
+species_heat_mat <- metab_target_species_cor %>%
+  filter(species %in% top_species_for_heatmap) %>%
+  group_by(metabolite, species) %>%
+  summarise(
+    rho = mean(rho, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = species,
+    values_from = rho,
+    values_fill = 0
+  ) %>%
+  column_to_rownames("metabolite") %>%
+  as.data.frame(check.names = FALSE)
+
+species_heat_mat[] <- lapply(species_heat_mat, function(x) {
+  suppressWarnings(as.numeric(x))
+})
+
+species_heat_mat <- as.matrix(species_heat_mat)
+species_heat_mat[is.na(species_heat_mat)] <- 0
+
+# 替换行名
+rownames(species_heat_mat) <- metab_label_df$label[
+  match(rownames(species_heat_mat), metab_label_df$metabolite)
+]
+
+species_anno <- target_risk_taxa_info %>%
+  filter(species %in% colnames(species_heat_mat)) %>%
+  select(
+    species,
+    host_class,
+    host_risk_score,
+    Phylum,
+    Genus
+  ) %>%
+  distinct(species, .keep_all = TRUE) %>%
+  mutate(
+    host_class = factor(host_class, levels = target_host_classes),
+    host_risk_score = suppressWarnings(as.numeric(host_risk_score))
+  ) %>%
+  column_to_rownames("species")
+
+species_anno <- species_anno[colnames(species_heat_mat), , drop = FALSE]
+
+if (nrow(species_heat_mat) >= 2 && ncol(species_heat_mat) >= 2) {
+  
+  pdf(
+    file.path(
+      analysis_dir,
+      "24_heatmap_diff_metabolites_vs_target_host_class_species_cor.pdf"
+    ),
+    width = 15,
+    height = 7
+  )
+  
+  pheatmap(
+    species_heat_mat,
+    annotation_col = species_anno,
+    cluster_rows = TRUE,
+    cluster_cols = TRUE,
+    color = colorRampPalette(c("#2166AC", "white", "#B2182B"))(100),
+    breaks = seq(-1, 1, length.out = 101),
+    main = "Spearman correlation: metabolites vs moderate/high-risk ARG hosts"
+  )
+  
+  dev.off()
+}
+
+# ---------------------------------------------------------
+# 15.6 输出正相关的中高风险微生物
+# ---------------------------------------------------------
+
+positive_target_species_links <- metab_target_species_cor %>%
+  filter(
+    !is.na(rho),
+    rho > 0,
+    p_value < 0.05
+  ) %>%
+  arrange(p_value, desc(rho))
+
+write_csv(
+  positive_target_species_links,
+  file.path(
+    analysis_dir,
+    "25_positive_diff_metabolites_vs_target_host_class_species_links.csv"
+  )
+)
+
+cat("正相关且 p < 0.05 的代谢物-中高风险 species 关系数量：", nrow(positive_target_species_links), "\n")
