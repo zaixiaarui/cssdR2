@@ -1,15 +1,16 @@
 #!/usr/bin/env Rscript
 
 # ============================================================
-# Urban wetland rhizosphere comparison by Hu Huanyong line
-# (also known as the Heihe-Tengchong line; user may refer to it
-# as "胡惟庸线")
+# Urban wetland rhizosphere geographic-boundary comparison
+# Default mode:
+#   Hu Huanyong line (Heihe-Tengchong line; user may refer to it
+#   as "胡惟庸线")
+# Optional mode via CSSD_BOUNDARY_MODE:
+#   QINLING_HUAIHE
 #
 # Analysis contract required by AGENTS.md:
 # 1. biological unit: sample
-# 2. grouping variable: derived `hu_line_group`
-#    - East/Southeast of the Hu line
-#    - West/Northwest of the Hu line
+# 2. grouping variable: derived boundary-side group
 # 3. abundance scale:
 #    - ARG: sample-level total abundance from normalized_cell.subtype.csv
 #      and subtype composition
@@ -44,11 +45,16 @@ project_root <- normalizePath(
 
 input_dir <- file.path(project_root, "input")
 result_dir <- file.path(input_dir, "result")
-output_dir <- file.path(
-  project_root,
-  "output",
-  "hu_huanyong_line_rhizosphere_comparison"
-)
+boundary_mode <- toupper(Sys.getenv("CSSD_BOUNDARY_MODE", unset = "HU_HUANYONG"))
+
+if (identical(boundary_mode, "QINLING_HUAIHE")) {
+  output_subdir <- "qinling_huaihe_line_rhizosphere_comparison"
+} else {
+  boundary_mode <- "HU_HUANYONG"
+  output_subdir <- "hu_huanyong_line_rhizosphere_comparison"
+}
+
+output_dir <- file.path(project_root, "output", output_subdir)
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
 p_adjust_method <- "BH"
@@ -72,6 +78,14 @@ heihe_lon <- 127.50
 heihe_lat <- 50.25
 tengchong_lon <- 98.49
 tengchong_lat <- 24.88
+
+# Qinling-Huaihe line approximation for sample-level grouping.
+# We operationalize the boundary as a west-east line segment between
+# a representative Qinling point and a representative eastern Huaihe point.
+qinling_west_lon <- 105.50
+qinling_west_lat <- 34.00
+huaihe_east_lon <- 120.50
+huaihe_east_lat <- 32.40
 
 # Existing old-name to SRR mapping used elsewhere in this repo
 sample_id_map <- c(
@@ -246,6 +260,14 @@ calc_hu_side <- function(longitude, latitude) {
   dx * py - dy * px
 }
 
+calc_qinling_huaihe_side <- function(longitude, latitude) {
+  dx <- huaihe_east_lon - qinling_west_lon
+  dy <- huaihe_east_lat - qinling_west_lat
+  px <- longitude - qinling_west_lon
+  py <- latitude - qinling_west_lat
+  dx * py - dy * px
+}
+
 assign_hu_group <- function(longitude, latitude) {
   side <- calc_hu_side(longitude, latitude)
   dplyr::case_when(
@@ -255,7 +277,52 @@ assign_hu_group <- function(longitude, latitude) {
   )
 }
 
-run_two_group_wilcox <- function(df, value_col, group_col = "hu_line_group") {
+assign_qinling_huaihe_group <- function(longitude, latitude) {
+  side <- calc_qinling_huaihe_side(longitude, latitude)
+  dplyr::case_when(
+    is.na(side) ~ NA_character_,
+    side >= 0 ~ "North",
+    side < 0 ~ "South"
+  )
+}
+
+get_boundary_group <- function(longitude, latitude) {
+  if (identical(boundary_mode, "QINLING_HUAIHE")) {
+    assign_qinling_huaihe_group(longitude, latitude)
+  } else {
+    assign_hu_group(longitude, latitude)
+  }
+}
+
+get_group_levels <- function() {
+  if (identical(boundary_mode, "QINLING_HUAIHE")) {
+    c("North", "South")
+  } else {
+    c("East_Southeast", "West_Northwest")
+  }
+}
+
+get_boundary_labels <- function() {
+  if (identical(boundary_mode, "QINLING_HUAIHE")) {
+    list(
+      title = "Rhizosphere samples grouped by Qinling-Huaihe line",
+      group_label = "Qinling-Huaihe group",
+      map_png = "00_rhizosphere_qinling_huaihe_map.png",
+      map_pdf = "00_rhizosphere_qinling_huaihe_map.pdf",
+      metadata_csv = "00_rhizosphere_metadata_qinling_huaihe_group.csv"
+    )
+  } else {
+    list(
+      title = "Rhizosphere samples grouped by Hu Huanyong line",
+      group_label = "Hu line group",
+      map_png = "00_rhizosphere_hu_line_map.png",
+      map_pdf = "00_rhizosphere_hu_line_map.pdf",
+      metadata_csv = "00_rhizosphere_metadata_hu_line_group.csv"
+    )
+  }
+}
+
+run_two_group_wilcox <- function(df, value_col, group_col = "geo_group") {
   dat <- df %>%
     select(all_of(c(group_col, value_col))) %>%
     drop_na()
@@ -293,7 +360,7 @@ run_permanova <- function(feature_by_sample, sample_meta, prefix) {
   keep_features <- rowSums(mat, na.rm = TRUE) > 0
   mat <- mat[keep_features, , drop = FALSE]
   
-  group_sizes <- table(sample_meta_use$hu_line_group)
+  group_sizes <- table(sample_meta_use$geo_group)
   if (
     nrow(mat) < 2 ||
     ncol(mat) < 2 * min_group_n ||
@@ -319,7 +386,7 @@ run_permanova <- function(feature_by_sample, sample_meta, prefix) {
   mat_t <- t(mat)
   dist_bray <- vegan::vegdist(mat_t, method = "bray")
   ad <- suppressWarnings(
-    vegan::adonis2(dist_bray ~ hu_line_group, data = sample_meta_use, permutations = 999)
+    vegan::adonis2(dist_bray ~ geo_group, data = sample_meta_use, permutations = 999)
   )
   ad_df <- as.data.frame(ad, check.names = FALSE)
   ad_df$term <- rownames(ad_df)
@@ -341,12 +408,12 @@ run_permanova <- function(feature_by_sample, sample_meta, prefix) {
   )
   
   hu_row <- ad_df %>%
-    filter(term %in% c("hu_line_group", "Model")) %>%
+    filter(term %in% c("geo_group", "hu_line_group", "Model")) %>%
     slice(1)
   
   term_note <- if (nrow(hu_row) == 0) {
     paste0(
-      "No hu_line_group row found. Available terms: ",
+      "No geo_group row found. Available terms: ",
       paste(unique(ad_df$term), collapse = "; "),
       ". Available columns: ",
       paste(colnames(ad_df), collapse = "; ")
@@ -396,8 +463,8 @@ summarise_group_mean <- function(feature_by_sample, sample_meta, top_n, label_co
       relative_abundance = safe_relative(mat[top_features, sam, drop = TRUE])
     )
   }) %>%
-    left_join(sample_meta_use %>% select(sample, hu_line_group), by = "sample") %>%
-    group_by(hu_line_group, .data[[label_col]]) %>%
+    left_join(sample_meta_use %>% select(sample, geo_group), by = "sample") %>%
+    group_by(geo_group, .data[[label_col]]) %>%
     summarise(
       mean_relative_abundance = mean(relative_abundance, na.rm = TRUE),
       median_relative_abundance = median(relative_abundance, na.rm = TRUE),
@@ -425,27 +492,27 @@ run_feature_wilcox <- function(feature_by_sample, sample_meta, top_n, feature_co
   stat_tbl <- map_dfr(top_features, function(feature_id) {
     dat <- tibble(
       sample = sample_meta_use$sample,
-      hu_line_group = sample_meta_use$hu_line_group,
+      geo_group = sample_meta_use$geo_group,
       value = as.numeric(mat[feature_id, sample_meta_use$sample])
     )
-    if (n_distinct(dat$hu_line_group) != 2) {
+    if (n_distinct(dat$geo_group) != 2) {
       return(tibble(
         feature = feature_id,
         n = nrow(dat),
         statistic = NA_real_,
         p_value = NA_real_,
-        mean_east_southeast = NA_real_,
-        mean_west_northwest = NA_real_
+        mean_group1 = NA_real_,
+        mean_group2 = NA_real_
       ))
     }
-    wt <- suppressWarnings(wilcox.test(value ~ hu_line_group, data = dat, exact = FALSE))
+    wt <- suppressWarnings(wilcox.test(value ~ geo_group, data = dat, exact = FALSE))
     tibble(
       feature = feature_id,
       n = nrow(dat),
       statistic = unname(wt$statistic),
       p_value = wt$p.value,
-      mean_east_southeast = mean(dat$value[dat$hu_line_group == "East_Southeast"], na.rm = TRUE),
-      mean_west_northwest = mean(dat$value[dat$hu_line_group == "West_Northwest"], na.rm = TRUE)
+      mean_group1 = mean(dat$value[dat$geo_group == get_group_levels()[1]], na.rm = TRUE),
+      mean_group2 = mean(dat$value[dat$geo_group == get_group_levels()[2]], na.rm = TRUE)
     )
   }) %>%
     mutate(
@@ -453,20 +520,25 @@ run_feature_wilcox <- function(feature_by_sample, sample_meta, top_n, feature_co
       significant = p_adj < 0.05
     ) %>%
     rename(!!feature_col_name := feature) %>%
-    arrange(p_adj, desc(abs(mean_east_southeast - mean_west_northwest)))
+    arrange(p_adj, desc(abs(mean_group1 - mean_group2)))
   
   stat_tbl
 }
 
 plot_hu_map <- function(sample_meta_use) {
-  p <- ggplot(sample_meta_use, aes(x = longitude, y = latitude, color = hu_line_group)) +
+  boundary_labels <- get_boundary_labels()
+  
+  if (identical(boundary_mode, "QINLING_HUAIHE")) {
+    seg_x <- c(qinling_west_lon, huaihe_east_lon)
+    seg_y <- c(qinling_west_lat, huaihe_east_lat)
+  } else {
+    seg_x <- c(heihe_lon, tengchong_lon)
+    seg_y <- c(heihe_lat, tengchong_lat)
+  }
+  
+  p <- ggplot(sample_meta_use, aes(x = longitude, y = latitude, color = geo_group)) +
     geom_segment(
-      aes(
-        x = heihe_lon,
-        y = heihe_lat,
-        xend = tengchong_lon,
-        yend = tengchong_lat
-      ),
+      aes(x = seg_x[1], y = seg_y[1], xend = seg_x[2], yend = seg_y[2]),
       inherit.aes = FALSE,
       linewidth = 0.8,
       color = "grey35",
@@ -474,23 +546,23 @@ plot_hu_map <- function(sample_meta_use) {
     ) +
     geom_point(size = 2.8, alpha = 0.9) +
     labs(
-      title = "Rhizosphere samples grouped by Hu Huanyong line",
+      title = boundary_labels$title,
       x = "Longitude",
       y = "Latitude",
-      color = "Hu line group"
+      color = boundary_labels$group_label
     ) +
     theme_bw() +
     theme(panel.grid = element_blank())
   
   ggsave(
-    filename = file.path(output_dir, "00_rhizosphere_hu_line_map.png"),
+    filename = file.path(output_dir, boundary_labels$map_png),
     plot = p,
     width = 7,
     height = 5,
     dpi = 300
   )
   ggsave(
-    filename = file.path(output_dir, "00_rhizosphere_hu_line_map.pdf"),
+    filename = file.path(output_dir, boundary_labels$map_pdf),
     plot = p,
     width = 7,
     height = 5
@@ -635,13 +707,10 @@ write_csv_out(
 rhizo_meta <- rhizo_meta_all %>%
   filter(is_rhizosphere) %>%
   mutate(
-    hu_line_group = assign_hu_group(longitude, latitude),
-    hu_line_group = factor(
-      hu_line_group,
-      levels = c("East_Southeast", "West_Northwest")
-    )
+    geo_group = get_boundary_group(longitude, latitude),
+    geo_group = factor(geo_group, levels = get_group_levels())
   ) %>%
-  filter(!is.na(hu_line_group)) %>%
+  filter(!is.na(geo_group)) %>%
   distinct(sample, .keep_all = TRUE)
 
 metadata_alias <- rhizo_meta %>%
@@ -658,15 +727,15 @@ if (nrow(rhizo_meta) < 2 * min_group_n) {
   write_csv_out(rhizo_diag, "00_rhizosphere_coordinate_diagnostic.csv")
   
   stop(
-    "Too few rhizosphere samples with valid coordinates after Hu line grouping. ",
-    "Check output/hu_huanyong_line_rhizosphere_comparison/",
+    "Too few rhizosphere samples with valid coordinates after geographic boundary grouping. ",
+    "Check output/", output_subdir, "/",
     "00_metadata_after_coordinate_merge.csv, ",
     "00_metadata_type1_coordinate_diagnostic.csv, and ",
     "00_rhizosphere_coordinate_diagnostic.csv."
   )
 }
 
-write_csv_out(rhizo_meta, "00_rhizosphere_metadata_hu_line_group.csv")
+write_csv_out(rhizo_meta, get_boundary_labels()$metadata_csv)
 plot_hu_map(rhizo_meta)
 
 # ============================================================
@@ -738,7 +807,7 @@ arg_permanova <- run_permanova(arg_mat, arg_sample_metric, "ARG_subtype_composit
 write_csv_out(arg_permanova$summary, "03_ARG_composition_PERMANOVA.csv")
 
 arg_group_summary <- arg_sample_metric %>%
-  group_by(hu_line_group) %>%
+  group_by(geo_group) %>%
   summarise(
     n_sample = n(),
     mean_ARG_total = mean(ARG_total, na.rm = TRUE),
@@ -943,7 +1012,7 @@ microbe_permanova <- run_permanova(species_counts, microbe_sample_metric, "Micro
 write_csv_out(microbe_permanova$summary, "14_microbe_species_PERMANOVA.csv")
 
 microbe_group_summary <- microbe_sample_metric %>%
-  group_by(hu_line_group) %>%
+  group_by(geo_group) %>%
   summarise(
     n_sample = n(),
     mean_total_count = mean(Microbe_total_count, na.rm = TRUE),
@@ -1070,7 +1139,7 @@ if (nrow(pathogen_counts) > 0) {
 }
 
 pathogen_group_summary <- pathogen_sample_metric %>%
-  group_by(hu_line_group) %>%
+  group_by(geo_group) %>%
   summarise(
     n_sample = n(),
     mean_pathogen_count = mean(pathogen_count, na.rm = TRUE),
@@ -1097,5 +1166,5 @@ final_summary <- bind_rows(
 
 write_csv_out(final_summary, "99_overall_PERMANOVA_summary.csv")
 
-message("Finished Hu Huanyong line rhizosphere comparison.")
+message("Finished geographic-boundary rhizosphere comparison: ", boundary_mode)
 message("Output directory: ", output_dir)

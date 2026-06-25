@@ -1018,7 +1018,6 @@ message("Selected effective metrics saved to: selected_effective_metrics_for_vis
 message("Interpretation table saved to: figure_interpretation_summary.csv")
 
 
-
 # ============================================================
 # Urban wetland rhizosphere only:
 # Why is ARG abundance lower in the low-ARG ktype?
@@ -2313,6 +2312,221 @@ ggsave(
   p_stress, width = 8.5, height = 5.5, dpi = 300
 )
 
+# ------------------------------------------------------------
+# 8.1 Exploratory figures calibrated by raw P values
+# ------------------------------------------------------------
+# These figures intentionally use unadjusted P < 0.05 and must be labelled
+# as exploratory. FDR-adjusted results remain the primary evidence.
+
+stress_result_raw_p <- stress_result %>%
+  mutate(
+    module_label = str_replace_all(module, "_", " "),
+    raw_p_class = case_when(
+      p_value < 0.05 & rho > 0 ~
+        "Lower function accompanies lower ARG",
+      p_value < 0.05 & rho < 0 ~
+        "Higher function accompanies lower ARG",
+      TRUE ~ "Raw P >= 0.05"
+    ),
+    raw_group_class = case_when(
+      wilcox_p < 0.05 & log2FC_Low_vs_High < 0 ~
+        "Lower in Low_ARG",
+      wilcox_p < 0.05 & log2FC_Low_vs_High > 0 ~
+        "Higher in Low_ARG",
+      TRUE ~ "Raw P >= 0.05"
+    )
+  )
+write_out(
+  stress_result_raw_p,
+  "08_ARG_mechanism_modules_raw_P_plot_data.csv"
+)
+
+# Figure A: continuous functional association with ARG abundance.
+p_module_raw_cor <- stress_result_raw_p %>%
+  mutate(module_label = forcats::fct_reorder(module_label, rho)) %>%
+  ggplot(aes(rho, module_label)) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey55") +
+  geom_point(
+    aes(color = raw_p_class, size = -log10(p_value)),
+    alpha = 0.9
+  ) +
+  scale_color_manual(
+    values = c(
+      "Lower function accompanies lower ARG" = "#D73027",
+      "Higher function accompanies lower ARG" = "#4575B4",
+      "Raw P >= 0.05" = "grey72"
+    )
+  ) +
+  labs(
+    x = "Spearman rho with ARG abundance",
+    y = NULL,
+    size = "-log10(raw P)",
+    color = NULL,
+    title = "Functional modules associated with ARG abundance",
+    subtitle = "Exploratory analysis based on unadjusted P values"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(legend.position = "bottom")
+ggsave(
+  file.path(output_dir, "08A_modules_vs_ARG_raw_P_effect_plot.pdf"),
+  p_module_raw_cor, width = 9.5, height = 7
+)
+ggsave(
+  file.path(output_dir, "08A_modules_vs_ARG_raw_P_effect_plot.png"),
+  p_module_raw_cor, width = 9.5, height = 7, dpi = 300
+)
+
+# Figure B: functional differences between Low_ARG and High_ARG.
+p_module_raw_volcano <- stress_result_raw_p %>%
+  ggplot(aes(log2FC_Low_vs_High, -log10(wilcox_p))) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey55") +
+  geom_hline(
+    yintercept = -log10(0.05),
+    linetype = 2, color = "grey55"
+  ) +
+  geom_point(aes(color = raw_group_class, size = abs(rho)), alpha = 0.9) +
+  geom_text(
+    data = stress_result_raw_p %>% filter(wilcox_p < 0.05),
+    aes(label = module_label),
+    size = 3.2,
+    vjust = -0.7,
+    check_overlap = TRUE,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(
+    values = c(
+      "Lower in Low_ARG" = "#D73027",
+      "Higher in Low_ARG" = "#4575B4",
+      "Raw P >= 0.05" = "grey72"
+    )
+  ) +
+  labs(
+    x = "log2 fold change (Low_ARG / High_ARG)",
+    y = "-log10(raw Wilcoxon P)",
+    size = "|Spearman rho|",
+    color = NULL,
+    title = "Functional differences between ARG groups",
+    subtitle = "Exploratory analysis; dashed line indicates raw P = 0.05"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(legend.position = "bottom")
+ggsave(
+  file.path(output_dir, "08B_modules_Low_vs_High_raw_P_volcano.pdf"),
+  p_module_raw_volcano, width = 9, height = 6.5
+)
+ggsave(
+  file.path(output_dir, "08B_modules_Low_vs_High_raw_P_volcano.png"),
+  p_module_raw_volcano, width = 9, height = 6.5, dpi = 300
+)
+
+# Figure C: sample-level relationships for modules with raw P < 0.05.
+raw_p_modules <- stress_result_raw_p %>%
+  filter(p_value < 0.05) %>%
+  pull(module)
+
+if (length(raw_p_modules) > 0) {
+  scatter_labels <- stress_result_raw_p %>%
+    filter(module %in% raw_p_modules) %>%
+    transmute(
+      module,
+      panel_label = paste0(
+        module_label,
+        "\nrho = ", sprintf("%.2f", rho),
+        ", raw P = ", format.pval(p_value, digits = 2, eps = 0.001)
+      )
+    )
+  
+  stress_scatter_data <- stress_sample %>%
+    filter(module %in% raw_p_modules) %>%
+    left_join(scatter_labels, by = "module")
+  
+  p_module_raw_scatter <- ggplot(
+    stress_scatter_data,
+    aes(
+      log10(module_relative_abundance + pseudocount),
+      log10(ARG_total + pseudocount),
+      color = ktype
+    )
+  ) +
+    geom_point(size = 2.4, alpha = 0.85) +
+    geom_smooth(
+      aes(group = 1),
+      method = "lm", se = TRUE,
+      color = "grey25", fill = "grey75",
+      linewidth = 0.6
+    ) +
+    facet_wrap(~ panel_label, scales = "free_x", ncol = 3) +
+    scale_color_manual(
+      values = c("Low_ARG" = "#4575B4", "High_ARG" = "#D73027")
+    ) +
+    labs(
+      x = "log10(module relative abundance)",
+      y = "log10(total ARG abundance)",
+      color = NULL,
+      title = "Sample-level functional associations with ARG abundance",
+      subtitle = "Panels selected using unadjusted Spearman P < 0.05"
+    ) +
+    theme_bw(base_size = 10) +
+    theme(legend.position = "bottom")
+  ggsave(
+    file.path(output_dir, "08C_significant_modules_ARG_raw_P_scatter.pdf"),
+    p_module_raw_scatter, width = 11, height = 8
+  )
+  ggsave(
+    file.path(output_dir, "08C_significant_modules_ARG_raw_P_scatter.png"),
+    p_module_raw_scatter, width = 11, height = 8, dpi = 300
+  )
+}
+
+# Figure D: pathway-level exploratory effects using raw Spearman P values.
+kegg_pathway_raw_p <- kegg_pathway_result %>%
+  filter(p_value < 0.05) %>%
+  mutate(
+    direction = if_else(
+      rho > 0,
+      "Lower pathway abundance accompanies lower ARG",
+      "Higher pathway abundance accompanies lower ARG"
+    )
+  ) %>%
+  slice_min(p_value, n = 25) %>%
+  mutate(feature = forcats::fct_reorder(feature, rho))
+
+if (nrow(kegg_pathway_raw_p) > 0) {
+  p_pathway_raw <- ggplot(
+    kegg_pathway_raw_p,
+    aes(rho, feature)
+  ) +
+    geom_vline(xintercept = 0, linetype = 2, color = "grey55") +
+    geom_point(
+      aes(color = direction, size = -log10(p_value)),
+      alpha = 0.9
+    ) +
+    scale_color_manual(
+      values = c(
+        "Lower pathway abundance accompanies lower ARG" = "#D73027",
+        "Higher pathway abundance accompanies lower ARG" = "#4575B4"
+      )
+    ) +
+    labs(
+      x = "Spearman rho with ARG abundance",
+      y = NULL,
+      size = "-log10(raw P)",
+      color = NULL,
+      title = "KEGG pathways associated with ARG abundance",
+      subtitle = "Top 25 exploratory associations based on unadjusted P values"
+    ) +
+    theme_bw(base_size = 10) +
+    theme(legend.position = "bottom")
+  ggsave(
+    file.path(output_dir, "08D_KEGG_pathways_vs_ARG_raw_P.pdf"),
+    p_pathway_raw, width = 10.5, height = 8
+  )
+  ggsave(
+    file.path(output_dir, "08D_KEGG_pathways_vs_ARG_raw_P.png"),
+    p_pathway_raw, width = 10.5, height = 8, dpi = 300
+  )
+}
+
 # ============================================================
 # 9. Integrated evidence summary
 # ============================================================
@@ -2388,3 +2602,539 @@ message(
   "MAG ARG-MGE overlap indicates dissemination potential, not observed HGT.\n",
   "Output: ", output_dir
 )
+
+# ============================================================
+# 10. Visualization of effective results
+# Files and paths follow the supplied visualization code.
+# Existing 06-08D outputs above are not renamed or overwritten.
+# ============================================================
+
+viz_dir <- file.path(output_dir, "figures_effective_results")
+dir.create(viz_dir, recursive = TRUE, showWarnings = FALSE)
+
+save_effective_plot <- function(
+    p, filename, width = 8, height = 6
+) {
+  ggsave(
+    file.path(viz_dir, paste0(filename, ".pdf")),
+    plot = p, width = width, height = height
+  )
+  ggsave(
+    file.path(viz_dir, paste0(filename, ".png")),
+    plot = p, width = width, height = height, dpi = 300
+  )
+}
+
+fmt_p <- function(p) {
+  case_when(
+    is.na(p) ~ "NA",
+    p < 0.001 ~ "<0.001",
+    TRUE ~ sprintf("%.3f", p)
+  )
+}
+
+z_score <- function(x) {
+  if (all(is.na(x)) || sd(x, na.rm = TRUE) == 0) {
+    return(rep(0, length(x)))
+  }
+  as.numeric(scale(x))
+}
+
+metric_label_table <- tribble(
+  ~metric, ~metric_label, ~plot_group,
+  "total_MAG_abundance", "Total MAG abundance", "Background",
+  "detected_MAG_richness", "Detected MAG richness", "Background",
+  "ARG_host_MAG_abundance", "ARG-host MAG abundance", "Host",
+  "ARG_host_MAG_richness", "ARG-host MAG richness", "Host",
+  "ARG_host_MAG_fraction", "ARG-host MAG fraction", "Host",
+  "ARG_MGE_MAG_abundance", "ARG-MGE MAG abundance", "MGE",
+  "ARG_MGE_MAG_richness", "ARG-MGE MAG richness", "MGE",
+  "ARG_MGE_MAG_fraction", "ARG-MGE MAG fraction", "MGE",
+  "ARG_VF_MAG_abundance", "ARG-VF MAG abundance", "VF",
+  "ARG_MGE_VF_MAG_abundance", "ARG-MGE-VF MAG abundance", "MGE + VF",
+  "ARG_MGE_VF_MAG_fraction", "ARG-MGE-VF MAG fraction", "MGE + VF",
+  "abundance_weighted_SARG_burden",
+  "Abundance-weighted SARG burden", "ARG burden",
+  "abundance_weighted_ARG_subtype_richness",
+  "Abundance-weighted ARG subtype richness", "ARG burden",
+  "abundance_weighted_MGE_burden_in_ARG_hosts",
+  "MGE burden in ARG hosts", "MGE",
+  "abundance_weighted_VF_burden_in_ARG_hosts",
+  "VF burden in ARG hosts", "VF"
+)
+
+label_metric <- function(x) {
+  label <- metric_label_table$metric_label[
+    match(x, metric_label_table$metric)
+  ]
+  ifelse(is.na(label), x, label)
+}
+
+mag_cor2 <- mag_cor %>%
+  left_join(metric_label_table, by = "metric") %>%
+  mutate(
+    metric_label = coalesce(metric_label, metric),
+    plot_group = coalesce(plot_group, "Other"),
+    significant = !is.na(p_adj) & p_adj < 0.05
+  )
+
+mag_group2 <- mag_group_test %>%
+  left_join(metric_label_table, by = "metric") %>%
+  mutate(
+    metric_label = coalesce(metric_label, metric),
+    plot_group = coalesce(plot_group, "Other"),
+    significant = !is.na(p_adj) & p_adj < 0.05
+  )
+
+sig_continuous_metrics <- mag_cor2 %>%
+  filter(significant, rho > 0) %>%
+  arrange(p_adj) %>%
+  pull(metric)
+sig_group_metrics <- mag_group2 %>%
+  filter(significant) %>%
+  arrange(p_adj) %>%
+  pull(metric)
+key_metrics <- union(sig_continuous_metrics, sig_group_metrics)
+
+readr::write_csv(
+  tibble(
+    selected_metric = key_metrics,
+    selected_label = label_metric(key_metrics),
+    metric_group = metric_label_table$plot_group[
+      match(key_metrics, metric_label_table$metric)
+    ]
+  ),
+  file.path(viz_dir, "selected_effective_metrics_for_visualization.csv")
+)
+
+# Figure 1: ARG metrics by ktype.
+arg_plot_df <- arg_sample %>%
+  select(sample, ktype, ARG_total, ARG_richness, ARG_Shannon) %>%
+  pivot_longer(
+    c(ARG_total, ARG_richness, ARG_Shannon),
+    names_to = "metric", values_to = "value"
+  ) %>%
+  mutate(
+    metric_label = recode(
+      metric,
+      ARG_total = "Total ARG abundance",
+      ARG_richness = "ARG subtype richness",
+      ARG_Shannon = "ARG Shannon diversity"
+    ),
+    value_plot = if_else(
+      metric == "ARG_total", log10(value + pseudocount), value
+    )
+  )
+
+p_arg_ktype <- ggplot(
+  arg_plot_df, aes(ktype, value_plot, fill = ktype)
+) +
+  geom_boxplot(width = 0.6, outlier.shape = NA, alpha = 0.75) +
+  geom_jitter(
+    aes(color = ktype), width = 0.15, size = 2.2,
+    alpha = 0.85, show.legend = FALSE
+  ) +
+  facet_wrap(~ metric_label, scales = "free_y", nrow = 1) +
+  scale_fill_manual(values = c(Low_ARG = "#7fbc41", High_ARG = "#de2d26")) +
+  scale_color_manual(values = c(Low_ARG = "#4d9221", High_ARG = "#a50f15")) +
+  labs(
+    x = NULL, y = NULL,
+    title = "ARG profiles across low- and high-ARG rhizosphere samples",
+    subtitle = paste(
+      "ARG_total is log10 transformed; descriptive if ktype was",
+      "defined using ARG abundance."
+    )
+  ) +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "none", plot.title = element_text(face = "bold"))
+save_effective_plot(
+  p_arg_ktype, "01_ARG_metrics_by_ktype_descriptive", 10, 4
+)
+
+# Figure 2: MAG correlations with continuous ARG abundance.
+mag_lollipop_df <- mag_cor2 %>%
+  arrange(rho) %>%
+  mutate(
+    metric_label = factor(metric_label, levels = metric_label),
+    sig_status = case_when(
+      p_adj < 0.05 & rho > 0 ~ "FDR significant positive",
+      p_adj < 0.05 & rho < 0 ~ "FDR significant negative",
+      TRUE ~ "Not FDR significant"
+    )
+  )
+
+p_mag_lollipop <- ggplot(
+  mag_lollipop_df, aes(rho, metric_label)
+) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey50") +
+  geom_segment(
+    aes(x = 0, xend = rho, yend = metric_label),
+    linewidth = 0.6, color = "grey60"
+  ) +
+  geom_point(aes(fill = sig_status), shape = 21, size = 3.4) +
+  scale_fill_manual(
+    values = c(
+      "FDR significant positive" = "#d7301f",
+      "FDR significant negative" = "#4575b4",
+      "Not FDR significant" = "grey80"
+    )
+  ) +
+  labs(
+    x = "Spearman rho with total ARG abundance", y = NULL, fill = NULL,
+    title = "MAG-level mechanisms associated with continuous ARG abundance"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "bottom", plot.title = element_text(face = "bold"))
+save_effective_plot(
+  p_mag_lollipop, "02_MAG_metrics_Spearman_lollipop_all", 9, 6.8
+)
+
+# Figure 3: significant continuous MAG metrics.
+if (length(sig_continuous_metrics) > 0) {
+  scatter_df <- mag_sample_metrics %>%
+    select(sample, ktype, ARG_total, all_of(sig_continuous_metrics)) %>%
+    pivot_longer(
+      all_of(sig_continuous_metrics),
+      names_to = "metric", values_to = "metric_value"
+    ) %>%
+    left_join(
+      mag_cor2 %>% select(metric, rho, p_adj, metric_label, plot_group),
+      by = "metric"
+    ) %>%
+    mutate(
+      x_plot = log10(metric_value + pseudocount),
+      y_plot = log10(ARG_total + pseudocount),
+      panel_label = paste0(
+        metric_label, "\nrho=", sprintf("%.2f", rho),
+        ", FDR=", fmt_p(p_adj)
+      )
+    )
+  
+  p_sig_scatter <- ggplot(scatter_df, aes(x_plot, y_plot)) +
+    geom_point(
+      aes(fill = ktype), shape = 21, size = 2.7, alpha = 0.85
+    ) +
+    geom_smooth(method = "lm", se = TRUE, linewidth = 0.65, color = "black") +
+    facet_wrap(~ panel_label, scales = "free_x", ncol = 3) +
+    scale_fill_manual(
+      values = c(Low_ARG = "#7fbc41", High_ARG = "#de2d26")
+    ) +
+    labs(
+      x = "log10(MAG-level metric + pseudocount)",
+      y = "log10(total ARG abundance)", fill = NULL,
+      title = "FDR-significant MAG-level metrics associated with ARG"
+    ) +
+    theme_bw(base_size = 11) +
+    theme(legend.position = "bottom", plot.title = element_text(face = "bold"))
+  save_effective_plot(
+    p_sig_scatter, "03_significant_MAG_metrics_vs_ARG_scatter", 12, 9
+  )
+}
+
+# Figure 4: significant High_ARG versus Low_ARG metrics.
+if (length(sig_group_metrics) > 0) {
+  group_plot_df <- mag_sample_metrics %>%
+    select(sample, ktype, all_of(sig_group_metrics)) %>%
+    pivot_longer(
+      all_of(sig_group_metrics),
+      names_to = "metric", values_to = "value"
+    ) %>%
+    left_join(
+      mag_group2 %>% select(metric, p_adj, metric_label),
+      by = "metric"
+    ) %>%
+    mutate(
+      value_plot = log10(value + pseudocount),
+      panel_label = paste0(
+        metric_label, "\nWilcoxon FDR=", fmt_p(p_adj)
+      )
+    )
+  
+  p_group_box <- ggplot(
+    group_plot_df, aes(ktype, value_plot, fill = ktype)
+  ) +
+    geom_boxplot(width = 0.62, outlier.shape = NA, alpha = 0.75) +
+    geom_jitter(
+      aes(color = ktype), width = 0.16, size = 2.2,
+      alpha = 0.85, show.legend = FALSE
+    ) +
+    facet_wrap(~ panel_label, scales = "free_y", ncol = 3) +
+    scale_fill_manual(
+      values = c(Low_ARG = "#7fbc41", High_ARG = "#de2d26")
+    ) +
+    scale_color_manual(
+      values = c(Low_ARG = "#4d9221", High_ARG = "#a50f15")
+    ) +
+    labs(
+      x = NULL, y = "log10(metric value + pseudocount)", fill = NULL,
+      title = "MAG-level metrics differing between ARG groups"
+    ) +
+    theme_bw(base_size = 11) +
+    theme(legend.position = "bottom", plot.title = element_text(face = "bold"))
+  save_effective_plot(
+    p_group_box, "04_significant_MAG_metrics_by_ktype_boxplot", 12, 7.5
+  )
+}
+
+# Figure 5: sample-level effective metric heatmap.
+if (length(key_metrics) > 0) {
+  heatmap_df <- mag_sample_metrics %>%
+    select(sample, ktype, ARG_total, all_of(key_metrics)) %>%
+    arrange(ARG_total) %>%
+    mutate(sample = factor(sample, levels = sample)) %>%
+    pivot_longer(
+      c(ARG_total, all_of(key_metrics)),
+      names_to = "metric", values_to = "value"
+    ) %>%
+    mutate(
+      value_trans = case_when(
+        str_detect(metric, "fraction") ~ value,
+        str_detect(metric, "richness") ~ log10(value + 1),
+        TRUE ~ log10(value + pseudocount)
+      )
+    ) %>%
+    group_by(metric) %>%
+    mutate(z = z_score(value_trans)) %>%
+    ungroup() %>%
+    mutate(
+      metric_label = if_else(
+        metric == "ARG_total", "Total ARG abundance", label_metric(metric)
+      )
+    )
+  
+  p_heatmap <- ggplot(
+    heatmap_df, aes(sample, metric_label, fill = z)
+  ) +
+    geom_tile(color = "white", linewidth = 0.25) +
+    scale_fill_gradient2(
+      low = "#2166ac", mid = "white", high = "#b2182b",
+      midpoint = 0, name = "Row z-score"
+    ) +
+    labs(
+      x = "Samples ordered by total ARG abundance", y = NULL,
+      title = "Sample-level heatmap of effective ARG attenuation metrics"
+    ) +
+    theme_bw(base_size = 11) +
+    theme(
+      axis.text.x = element_text(angle = 90, hjust = 1),
+      panel.grid = element_blank(),
+      plot.title = element_text(face = "bold")
+    )
+  save_effective_plot(
+    p_heatmap, "05_sample_level_effective_metric_heatmap", 11, 6.5
+  )
+}
+
+# Figure 6: MAG annotation evidence composition.
+mag_bool_cols <- intersect(
+  c(
+    "SARG_host", "DeepARG_host", "consensus_ARG_host", "MGE_host",
+    "VF_host", "ARG_MGE_MAG", "ARG_VF_MAG", "ARG_MGE_VF_MAG"
+  ),
+  colnames(mag_annotation)
+)
+
+if (length(mag_bool_cols) > 0) {
+  mag_composition <- mag_annotation %>%
+    summarise(across(all_of(mag_bool_cols), ~ sum(.x %in% TRUE, na.rm = TRUE))) %>%
+    pivot_longer(everything(), names_to = "evidence", values_to = "MAG_count") %>%
+    mutate(
+      total_MAG = nrow(mag_annotation),
+      MAG_percent = 100 * MAG_count / total_MAG,
+      evidence_label = recode(
+        evidence,
+        SARG_host = "SARG host",
+        DeepARG_host = "DeepARG host",
+        consensus_ARG_host = "Consensus ARG host",
+        MGE_host = "MGE host",
+        VF_host = "VFDB signal",
+        ARG_MGE_MAG = "ARG + MGE MAG",
+        ARG_VF_MAG = "ARG + VF MAG",
+        ARG_MGE_VF_MAG = "ARG + MGE + VF MAG"
+      )
+    )
+  readr::write_csv(
+    mag_composition,
+    file.path(viz_dir, "MAG_annotation_evidence_composition.csv")
+  )
+  
+  p_mag_comp <- ggplot(
+    mag_composition, aes(evidence_label, MAG_percent)
+  ) +
+    geom_col(width = 0.68, fill = "#756bb1") +
+    geom_text(
+      aes(label = paste0(MAG_count, "\n", sprintf("%.1f%%", MAG_percent))),
+      vjust = -0.25, size = 3.2
+    ) +
+    scale_y_continuous(
+      limits = c(0, max(mag_composition$MAG_percent) * 1.18)
+    ) +
+    labs(
+      x = NULL, y = "Percentage of MAGs (%)",
+      title = "Distribution of ARG, MGE and VF evidence among MAGs"
+    ) +
+    theme_bw(base_size = 12) +
+    theme(
+      axis.text.x = element_text(angle = 35, hjust = 1),
+      plot.title = element_text(face = "bold")
+    )
+  save_effective_plot(
+    p_mag_comp, "06_MAG_annotation_evidence_composition", 9, 5.5
+  )
+}
+
+# Figure 7: integrated evidence chain.
+evidence_plot_df <- evidence_summary %>%
+  mutate(
+    metric_label = if_else(
+      metric %in% metric_label_table$metric,
+      label_metric(metric), str_replace_all(metric, "_", " ")
+    ),
+    support = case_when(
+      !is.na(p_adj) & p_adj < 0.05 & effect > 0 ~ "Supported positive",
+      !is.na(p_adj) & p_adj < 0.05 & effect < 0 ~ "Supported negative",
+      TRUE ~ "Not supported"
+    )
+  ) %>%
+  filter(is.finite(effect))
+
+p_evidence <- ggplot(
+  evidence_plot_df, aes(effect, forcats::fct_reorder(metric_label, effect))
+) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey55") +
+  geom_segment(
+    aes(x = 0, xend = effect, yend = metric_label),
+    linewidth = 0.5, color = "grey65"
+  ) +
+  geom_point(aes(fill = support), shape = 21, size = 3.2) +
+  facet_grid(evidence_chain ~ ., scales = "free_y", space = "free_y") +
+  scale_fill_manual(
+    values = c(
+      "Supported positive" = "#d7301f",
+      "Supported negative" = "#4575b4",
+      "Not supported" = "grey82"
+    )
+  ) +
+  labs(
+    x = "Effect size", y = NULL, fill = NULL,
+    title = "Integrated evidence for low-ARG rhizosphere mechanisms"
+  ) +
+  theme_bw(base_size = 10) +
+  theme(legend.position = "bottom", plot.title = element_text(face = "bold"))
+save_effective_plot(
+  p_evidence, "07_integrated_evidence_chain_summary", 10, 12
+)
+
+# Figure 8: environmental factor correlation overview.
+if (exists("factor_cor") && nrow(factor_cor) > 0) {
+  factor_cor2 <- factor_cor %>%
+    mutate(
+      support = case_when(
+        p_adj < 0.05 & rho > 0 ~ "FDR significant positive",
+        p_adj < 0.05 & rho < 0 ~ "FDR significant negative",
+        TRUE ~ "Not FDR significant"
+      ),
+      factor = forcats::fct_reorder(factor, rho)
+    )
+  
+  p_factor_cor <- ggplot(factor_cor2, aes(rho, factor)) +
+    geom_vline(xintercept = 0, linetype = 2, color = "grey55") +
+    geom_segment(
+      aes(x = 0, xend = rho, yend = factor),
+      linewidth = 0.6, color = "grey65"
+    ) +
+    geom_point(aes(fill = support), shape = 21, size = 3.4) +
+    scale_fill_manual(
+      values = c(
+        "FDR significant positive" = "#d7301f",
+        "FDR significant negative" = "#4575b4",
+        "Not FDR significant" = "grey82"
+      )
+    ) +
+    labs(
+      x = "Spearman rho with total ARG abundance",
+      y = NULL, fill = NULL,
+      title = paste(
+        "Environmental and socioeconomic factors showed no",
+        "FDR-significant association"
+      )
+    ) +
+    theme_bw(base_size = 12) +
+    theme(legend.position = "bottom", plot.title = element_text(face = "bold"))
+  save_effective_plot(
+    p_factor_cor, "08_environmental_factor_correlation_overview", 8.5, 5.8
+  )
+}
+
+# Figure 9: exploratory environmental model P-value heatmap.
+if (exists("factor_models") && nrow(factor_models) > 0) {
+  factor_model_plot <- factor_models %>%
+    filter(!is.na(p_value), p_value > 0) %>%
+    mutate(
+      model_term = paste(model, term, sep = ": "),
+      neg_log10_p = -log10(p_value),
+      raw_p_lt_0.1 = p_value < 0.1
+    )
+  
+  p_factor_model <- ggplot(
+    factor_model_plot, aes(model_term, factor)
+  ) +
+    geom_tile(aes(fill = neg_log10_p), color = "white", linewidth = 0.3) +
+    geom_text(
+      aes(label = ifelse(raw_p_lt_0.1, sprintf("p=%.2f", p_value), "")),
+      size = 2.7
+    ) +
+    scale_fill_gradient(
+      low = "grey95", high = "#f46d43", name = "-log10(raw p)"
+    ) +
+    labs(
+      x = NULL, y = NULL,
+      title = "Exploratory environmental factor models"
+    ) +
+    theme_bw(base_size = 10) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      panel.grid = element_blank(),
+      plot.title = element_text(face = "bold")
+    )
+  save_effective_plot(
+    p_factor_model, "09_exploratory_factor_model_pvalue_heatmap", 12, 6.5
+  )
+}
+
+figure_interpretation <- tribble(
+  ~figure, ~main_message, ~use_in_main_text,
+  "01_ARG_metrics_by_ktype_descriptive",
+  "ARG profiles differ descriptively between ktype groups.",
+  "Supplementary or early result panel",
+  "02_MAG_metrics_Spearman_lollipop_all",
+  "Continuous ARG abundance is associated with host, MGE and VF metrics.",
+  "Main figure",
+  "03_significant_MAG_metrics_vs_ARG_scatter",
+  "Sample-level plots show the strongest continuous MAG associations.",
+  "Main figure",
+  "04_significant_MAG_metrics_by_ktype_boxplot",
+  "Group comparisons provide secondary support for MAG mechanisms.",
+  "Main or supplementary figure",
+  "05_sample_level_effective_metric_heatmap",
+  "Effective host, MGE and VF metrics change coordinately across samples.",
+  "Main figure",
+  "06_MAG_annotation_evidence_composition",
+  "MAGs show stratified ARG, MGE and VF risk evidence.",
+  "Main or supplementary figure",
+  "07_integrated_evidence_chain_summary",
+  "The figure integrates MAG, environment, KEGG and stress evidence.",
+  "Main summary figure",
+  "08_environmental_factor_correlation_overview",
+  "Measured environmental factors lack strong FDR support.",
+  "Supplementary figure",
+  "09_exploratory_factor_model_pvalue_heatmap",
+  "Raw environmental model trends remain exploratory.",
+  "Supplementary figure"
+)
+readr::write_csv(
+  figure_interpretation,
+  file.path(viz_dir, "figure_interpretation_summary.csv")
+)
+
+message("Effective-result figures saved to: ", viz_dir)
