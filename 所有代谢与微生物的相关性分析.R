@@ -5941,3 +5941,3320 @@ write_csv(
 
 cat("丰度前20代谢物与低风险 ARG 宿主总体方向：\n")
 print(top20_lowrisk_direction_summary)
+
+
+# =========================================================
+# 22. 丰度前20代谢产物与病原菌相关性分析
+# =========================================================
+
+library(tidyverse)
+library(ggplot2)
+library(pheatmap)
+library(scales)
+
+top20_pathogen_dir <- file.path(
+  analysis_dir,
+  "22_top20_abundant_metabolites_vs_pathogens"
+)
+
+dir.create(
+  top20_pathogen_dir,
+  showWarnings = FALSE,
+  recursive = TRUE
+)
+
+# ---------------------------------------------------------
+# 22.1 基础设置
+# ---------------------------------------------------------
+
+unknown_pattern <- regex(
+  "^unknown|unknown_mz|unknow|^na$|^nan$",
+  ignore_case = TRUE
+)
+
+# 病原菌文件
+pathogen_file <- file.path(input, "pathogenic.csv")
+
+if (!file.exists(pathogen_file)) {
+  stop("没有找到 pathogenic.csv，请检查路径：", pathogen_file)
+}
+
+pathogen_raw <- read_csv(pathogen_file, show_col_types = FALSE)
+
+cat("pathogenic.csv 列名：\n")
+print(colnames(pathogen_raw))
+
+# ---------------------------------------------------------
+# 22.2 物种名清洗函数
+# ---------------------------------------------------------
+
+clean_species_name <- function(x) {
+  x %>%
+    as.character() %>%
+    str_replace_all("^s__", "") %>%
+    str_replace_all("^g__", "") %>%
+    str_replace_all(";", " ") %>%
+    str_replace_all("\\|", " ") %>%
+    str_replace_all("_", " ") %>%
+    str_squish() %>%
+    str_to_lower()
+}
+
+# ---------------------------------------------------------
+# 22.3 整理病原菌列表：修正版
+# ---------------------------------------------------------
+
+pathogen_df <- pathogen_raw %>%
+  rename_with(~ str_replace_all(.x, " ", "_")) %>%
+  mutate(
+    Species = as.character(Species),
+    Host = as.character(Host),
+    Host = case_when(
+      is.na(Host) | Host == "" ~ "Unknown",
+      str_detect(str_to_lower(Host), "human") ~ "Human",
+      str_detect(str_to_lower(Host), "animal") ~ "Animal",
+      str_detect(str_to_lower(Host), "zoonotic") ~ "Zoonotic",
+      TRUE ~ Host
+    ),
+    Species_clean = clean_species_name(Species)
+  ) %>%
+  filter(
+    !is.na(Species_clean),
+    Species_clean != ""
+  ) %>%
+  distinct(Species_clean, .keep_all = TRUE)
+
+write_csv(
+  pathogen_df,
+  file.path(
+    top20_pathogen_dir,
+    "01_pathogen_list_cleaned.csv"
+  )
+)
+
+cat("病原菌数据库物种数：", nrow(pathogen_df), "\n")
+print(table(pathogen_df$Host))
+# ---------------------------------------------------------
+# 22.4 整理微生物物种注释，并匹配病原菌
+# ---------------------------------------------------------
+
+microbe_taxon_for_pathogen <- tibble(
+  species = colnames(bac_rel)
+) %>%
+  left_join(
+    bac_taxon_info %>%
+      distinct(species, .keep_all = TRUE),
+    by = "species"
+  ) %>%
+  mutate(
+    Species_for_match = case_when(
+      "Species" %in% colnames(.) & !is.na(Species) & Species != "" ~ as.character(Species),
+      TRUE ~ as.character(species)
+    ),
+    Species_clean = clean_species_name(Species_for_match)
+  ) %>%
+  left_join(
+    pathogen_df %>%
+      select(
+        Pathogen_species = Species,
+        Pathogen_Host = Host,
+        Species_clean
+      ),
+    by = "Species_clean"
+  ) %>%
+  mutate(
+    is_pathogen = !is.na(Pathogen_species),
+    Pathogen_Host = replace_na(Pathogen_Host, "Non-pathogen")
+  )
+
+matched_pathogens <- microbe_taxon_for_pathogen %>%
+  filter(is_pathogen)
+
+write_csv(
+  microbe_taxon_for_pathogen,
+  file.path(
+    top20_pathogen_dir,
+    "02_all_microbes_pathogen_matching_result.csv"
+  )
+)
+
+write_csv(
+  matched_pathogens,
+  file.path(
+    top20_pathogen_dir,
+    "03_matched_pathogenic_species_in_microbiome.csv"
+  )
+)
+
+cat("在微生物丰度表中匹配到的病原菌 species 数量：", nrow(matched_pathogens), "\n")
+print(table(matched_pathogens$Pathogen_Host))
+
+if (nrow(matched_pathogens) == 0) {
+  stop("没有匹配到病原菌，请检查 bac_rel 的列名和 pathogenic.csv 的 Species 是否一致。")
+}
+
+# ---------------------------------------------------------
+# 22.5 筛选丰度前20已知代谢物
+# ---------------------------------------------------------
+
+common_samples_pathogen <- Reduce(
+  intersect,
+  list(
+    rownames(metab_rel),
+    rownames(metab_tr),
+    rownames(bac_rel)
+  )
+)
+
+metab_rel_use <- metab_rel[common_samples_pathogen, , drop = FALSE]
+metab_tr_use  <- metab_tr[common_samples_pathogen, , drop = FALSE]
+bac_rel_use   <- bac_rel[common_samples_pathogen, , drop = FALSE]
+
+top20_metab_rank_pathogen <- tibble(
+  metabolite = colnames(metab_rel_use),
+  total_rel_abundance = colSums(metab_rel_use, na.rm = TRUE),
+  mean_rel_abundance = colMeans(metab_rel_use, na.rm = TRUE),
+  median_rel_abundance = apply(metab_rel_use, 2, median, na.rm = TRUE),
+  prevalence = colMeans(metab_rel_use > 0, na.rm = TRUE)
+) %>%
+  left_join(
+    metab_anno %>%
+      select(
+        metabolite_id,
+        MS2_name,
+        MS2_score,
+        level,
+        mz,
+        rt,
+        type,
+        Formula,
+        Super.Class,
+        Class
+      ) %>%
+      distinct(metabolite_id, .keep_all = TRUE),
+    by = c("metabolite" = "metabolite_id")
+  ) %>%
+  mutate(
+    MS2_name = as.character(MS2_name),
+    is_unknown_metabolite = case_when(
+      is.na(MS2_name) | MS2_name == "" ~ TRUE,
+      str_detect(MS2_name, unknown_pattern) ~ TRUE,
+      str_detect(metabolite, unknown_pattern) ~ TRUE,
+      TRUE ~ FALSE
+    )
+  ) %>%
+  filter(
+    !is_unknown_metabolite,
+    total_rel_abundance > 0
+  ) %>%
+  arrange(desc(total_rel_abundance)) %>%
+  mutate(
+    abundance_prop = total_rel_abundance / sum(total_rel_abundance, na.rm = TRUE),
+    cumulative_prop = cumsum(abundance_prop),
+    abundance_rank = row_number()
+  )
+
+top20_metabolites_pathogen <- top20_metab_rank_pathogen %>%
+  slice_head(n = 20)
+
+top20_metab_ids_pathogen <- top20_metabolites_pathogen$metabolite
+
+write_csv(
+  top20_metab_rank_pathogen,
+  file.path(
+    top20_pathogen_dir,
+    "04_all_known_metabolites_abundance_rank.csv"
+  )
+)
+
+write_csv(
+  top20_metabolites_pathogen,
+  file.path(
+    top20_pathogen_dir,
+    "05_top20_abundant_known_metabolites.csv"
+  )
+)
+
+# ---------------------------------------------------------
+# 22.6 构建整体病原菌丰度和不同 Host 类型病原菌丰度
+# ---------------------------------------------------------
+
+pathogen_species <- intersect(
+  matched_pathogens$species,
+  colnames(bac_rel_use)
+)
+
+pathogen_abun <- rowSums(
+  bac_rel_use[, pathogen_species, drop = FALSE],
+  na.rm = TRUE
+)
+
+pathogen_sample_df <- tibble(
+  sample = common_samples_pathogen,
+  all_pathogen_abun = pathogen_abun,
+  all_pathogen_abun_log = log1p(all_pathogen_abun * 1e6)
+)
+
+# 不同 Host 类型病原菌丰度
+pathogen_host_abun_df <- matched_pathogens %>%
+  filter(species %in% colnames(bac_rel_use)) %>%
+  select(species, Pathogen_Host) %>%
+  distinct() %>%
+  group_by(Pathogen_Host) %>%
+  summarise(
+    species_list = list(species),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    abun_df = map(
+      species_list,
+      function(sp) {
+        tibble(
+          sample = common_samples_pathogen,
+          abundance = rowSums(
+            bac_rel_use[, sp, drop = FALSE],
+            na.rm = TRUE
+          )
+        )
+      }
+    )
+  ) %>%
+  select(Pathogen_Host, abun_df) %>%
+  unnest(abun_df) %>%
+  pivot_wider(
+    names_from = Pathogen_Host,
+    values_from = abundance,
+    values_fill = 0
+  )
+
+pathogen_sample_df <- pathogen_sample_df %>%
+  left_join(pathogen_host_abun_df, by = "sample")
+
+# 添加 log 转换列
+host_cols <- setdiff(
+  colnames(pathogen_sample_df),
+  c("sample", "all_pathogen_abun", "all_pathogen_abun_log")
+)
+
+for (hc in host_cols) {
+  pathogen_sample_df[[paste0(hc, "_log")]] <- log1p(pathogen_sample_df[[hc]] * 1e6)
+}
+
+write_csv(
+  pathogen_sample_df,
+  file.path(
+    top20_pathogen_dir,
+    "06_pathogen_abundance_by_sample.csv"
+  )
+)
+
+# ---------------------------------------------------------
+# 22.7 Spearman：Top20 代谢物 vs 整体病原菌丰度
+# ---------------------------------------------------------
+
+safe_cor <- function(x, y, method = "spearman") {
+  
+  x <- as.numeric(x)
+  y <- as.numeric(y)
+  
+  ok <- is.finite(x) & is.finite(y)
+  x <- x[ok]
+  y <- y[ok]
+  
+  if (length(x) < 3) {
+    return(tibble(rho = NA_real_, p_value = NA_real_))
+  }
+  
+  if (sd(x, na.rm = TRUE) == 0 || sd(y, na.rm = TRUE) == 0) {
+    return(tibble(rho = NA_real_, p_value = NA_real_))
+  }
+  
+  ct <- suppressWarnings(
+    cor.test(x, y, method = method, exact = FALSE)
+  )
+  
+  tibble(
+    rho = unname(ct$estimate),
+    p_value = ct$p.value
+  )
+}
+
+top20_metab_all_pathogen_cor <- map_dfr(
+  top20_metab_ids_pathogen,
+  function(met) {
+    
+    met_vec <- as.numeric(metab_tr_use[, met])
+    
+    cor_all <- safe_cor(
+      met_vec,
+      pathogen_sample_df$all_pathogen_abun_log
+    )
+    
+    tibble(
+      metabolite = met,
+      rho_all_pathogen = cor_all$rho,
+      p_all_pathogen = cor_all$p_value
+    )
+  }
+) %>%
+  mutate(
+    p_all_pathogen_adj = p.adjust(p_all_pathogen, method = "BH"),
+    direction = case_when(
+      rho_all_pathogen > 0 ~ "Positive",
+      rho_all_pathogen < 0 ~ "Negative",
+      TRUE ~ "Zero"
+    ),
+    significance = case_when(
+      p_all_pathogen < 0.05 & abs(rho_all_pathogen) >= 0.5 ~ "p<0.05_absrho>=0.5",
+      p_all_pathogen < 0.05 ~ "p<0.05",
+      TRUE ~ "Not significant"
+    )
+  ) %>%
+  left_join(
+    top20_metabolites_pathogen %>%
+      select(
+        metabolite,
+        abundance_rank,
+        MS2_name,
+        MS2_score,
+        level,
+        Super.Class,
+        Class,
+        total_rel_abundance,
+        mean_rel_abundance,
+        prevalence
+      ),
+    by = "metabolite"
+  ) %>%
+  arrange(p_all_pathogen, desc(abs(rho_all_pathogen)))
+
+write_csv(
+  top20_metab_all_pathogen_cor,
+  file.path(
+    top20_pathogen_dir,
+    "07_top20_metabolites_vs_all_pathogen_spearman.csv"
+  )
+)
+
+# ---------------------------------------------------------
+# 22.8 Top20 代谢物 vs 不同病原菌 Host 类型
+# ---------------------------------------------------------
+
+pathogen_response_cols <- c(
+  "all_pathogen_abun_log",
+  paste0(host_cols, "_log")
+)
+
+top20_metab_pathogen_host_cor <- map_dfr(
+  top20_metab_ids_pathogen,
+  function(met) {
+    
+    met_vec <- as.numeric(metab_tr_use[, met])
+    
+    map_dfr(
+      pathogen_response_cols,
+      function(resp) {
+        
+        cor_i <- safe_cor(
+          met_vec,
+          pathogen_sample_df[[resp]]
+        )
+        
+        tibble(
+          metabolite = met,
+          pathogen_group = resp,
+          rho = cor_i$rho,
+          p_value = cor_i$p_value
+        )
+      }
+    )
+  }
+) %>%
+  mutate(
+    p_adj_BH = p.adjust(p_value, method = "BH"),
+    direction = case_when(
+      rho > 0 ~ "Positive",
+      rho < 0 ~ "Negative",
+      TRUE ~ "Zero"
+    )
+  ) %>%
+  left_join(
+    top20_metabolites_pathogen %>%
+      select(
+        metabolite,
+        abundance_rank,
+        MS2_name,
+        MS2_score,
+        level,
+        Super.Class,
+        Class
+      ),
+    by = "metabolite"
+  ) %>%
+  arrange(p_value, desc(abs(rho)))
+
+write_csv(
+  top20_metab_pathogen_host_cor,
+  file.path(
+    top20_pathogen_dir,
+    "08_top20_metabolites_vs_pathogen_host_groups_spearman.csv"
+  )
+)
+
+# ---------------------------------------------------------
+# 22.9 Top20 代谢物 vs 单个病原菌 species
+# ---------------------------------------------------------
+
+pathogen_species_mat <- bac_rel_use[
+  ,
+  pathogen_species,
+  drop = FALSE
+]
+
+pathogen_species_mat_log <- log1p(pathogen_species_mat * 1e6)
+
+top20_metab_pathogen_species_cor <- map_dfr(
+  top20_metab_ids_pathogen,
+  function(met) {
+    
+    met_vec <- as.numeric(metab_tr_use[, met])
+    
+    map_dfr(
+      colnames(pathogen_species_mat_log),
+      function(sp) {
+        
+        cor_i <- safe_cor(
+          met_vec,
+          pathogen_species_mat_log[, sp]
+        )
+        
+        tibble(
+          metabolite = met,
+          species = sp,
+          rho = cor_i$rho,
+          p_value = cor_i$p_value
+        )
+      }
+    )
+  }
+) %>%
+  mutate(
+    p_adj_BH = p.adjust(p_value, method = "BH"),
+    direction = case_when(
+      rho > 0 ~ "Positive",
+      rho < 0 ~ "Negative",
+      TRUE ~ "Zero"
+    ),
+    abs_rho = abs(rho)
+  ) %>%
+  left_join(
+    top20_metabolites_pathogen %>%
+      select(
+        metabolite,
+        abundance_rank,
+        MS2_name,
+        MS2_score,
+        level,
+        Super.Class,
+        Class
+      ),
+    by = "metabolite"
+  ) %>%
+  left_join(
+    matched_pathogens %>%
+      select(
+        species,
+        Pathogen_species,
+        Pathogen_Host
+      ),
+    by = "species"
+  ) %>%
+  arrange(p_value, desc(abs_rho))
+
+write_csv(
+  top20_metab_pathogen_species_cor,
+  file.path(
+    top20_pathogen_dir,
+    "09_top20_metabolites_vs_pathogen_species_spearman.csv"
+  )
+)
+
+top20_metab_pathogen_species_sig <- top20_metab_pathogen_species_cor %>%
+  filter(
+    p_value < 0.05,
+    abs_rho >= 0.5
+  )
+
+write_csv(
+  top20_metab_pathogen_species_sig,
+  file.path(
+    top20_pathogen_dir,
+    "10_sig_top20_metabolites_vs_pathogen_species_spearman.csv"
+  )
+)
+
+# ---------------------------------------------------------
+# 22.10 可视化 1：Top20 代谢物 vs 整体病原菌柱图
+# ---------------------------------------------------------
+
+plot_all_pathogen_df <- top20_metab_all_pathogen_cor %>%
+  mutate(
+    metabolite_label = ifelse(
+      is.na(MS2_name) | MS2_name == "",
+      metabolite,
+      MS2_name
+    ),
+    metabolite_label = str_replace_all(metabolite_label, "−", "-"),
+    metabolite_label = str_replace_all(metabolite_label, "–", "-"),
+    metabolite_label = str_replace_all(metabolite_label, "—", "-"),
+    metabolite_label = str_trunc(metabolite_label, width = 45),
+    metabolite_label = factor(
+      metabolite_label,
+      levels = metabolite_label[order(rho_all_pathogen)]
+    ),
+    sig_label = case_when(
+      p_all_pathogen < 0.001 ~ "***",
+      p_all_pathogen < 0.01 ~ "**",
+      p_all_pathogen < 0.05 ~ "*",
+      TRUE ~ ""
+    )
+  )
+
+p_top20_all_pathogen <- ggplot(
+  plot_all_pathogen_df,
+  aes(
+    x = metabolite_label,
+    y = rho_all_pathogen,
+    fill = direction
+  )
+) +
+  geom_col(width = 0.75, color = "white", linewidth = 0.2) +
+  geom_hline(yintercept = 0, linewidth = 0.4) +
+  geom_text(
+    aes(label = sig_label),
+    hjust = ifelse(plot_all_pathogen_df$rho_all_pathogen >= 0, -0.2, 1.2),
+    size = 4
+  ) +
+  coord_flip() +
+  scale_fill_manual(
+    values = c(
+      "Positive" = "#B2182B",
+      "Negative" = "#2166AC",
+      "Zero" = "grey80"
+    )
+  ) +
+  theme_bw() +
+  labs(
+    x = NULL,
+    y = "Spearman rho with all pathogen abundance",
+    fill = "Direction",
+    title = "Top20 abundant metabolites vs all pathogens",
+    subtitle = "Pathogen abundance = sum of relative abundance of matched pathogenic species"
+  ) +
+  theme(
+    axis.text.y = element_text(size = 8),
+    axis.text.x = element_text(size = 9),
+    legend.position = "right"
+  )
+
+ggsave(
+  file.path(
+    top20_pathogen_dir,
+    "11_barplot_top20_metabolites_vs_all_pathogen_rho.pdf"
+  ),
+  p_top20_all_pathogen,
+  width = 9,
+  height = 6,
+  useDingbats = FALSE
+)
+
+ggsave(
+  file.path(
+    top20_pathogen_dir,
+    "11_barplot_top20_metabolites_vs_all_pathogen_rho.png"
+  ),
+  p_top20_all_pathogen,
+  width = 9,
+  height = 6,
+  dpi = 300
+)
+
+p_top20_all_pathogen
+#dev.off()
+
+# ---------------------------------------------------------
+# 22.11 可视化 2：Top20 代谢物 vs 病原菌 Host group 热图
+# ---------------------------------------------------------
+
+heat_df <- top20_metab_pathogen_host_cor %>%
+  mutate(
+    metabolite_label = ifelse(
+      is.na(MS2_name) | MS2_name == "",
+      metabolite,
+      MS2_name
+    ),
+    metabolite_label = str_replace_all(metabolite_label, "−", "-"),
+    metabolite_label = str_replace_all(metabolite_label, "–", "-"),
+    metabolite_label = str_replace_all(metabolite_label, "—", "-"),
+    metabolite_label = str_trunc(metabolite_label, width = 45),
+    pathogen_group = str_replace_all(pathogen_group, "_log$", ""),
+    pathogen_group = str_replace_all(pathogen_group, "_", " ")
+  ) %>%
+  select(metabolite_label, pathogen_group, rho) %>%
+  distinct() %>%
+  pivot_wider(
+    names_from = pathogen_group,
+    values_from = rho
+  )
+
+heat_mat <- heat_df %>%
+  column_to_rownames("metabolite_label") %>%
+  as.matrix()
+
+pdf(
+  file.path(
+    top20_pathogen_dir,
+    "12_heatmap_top20_metabolites_vs_pathogen_groups_rho.pdf"
+  ),
+  width = 7,
+  height = 8,
+  useDingbats = FALSE
+)
+
+pheatmap(
+  heat_mat,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  color = colorRampPalette(c("#2166AC", "white", "#B2182B"))(100),
+  breaks = seq(-1, 1, length.out = 101),
+  fontsize_row = 8,
+  fontsize_col = 9,
+  main = "Top20 metabolites vs pathogen groups"
+)
+
+dev.off()
+
+png(
+  file.path(
+    top20_pathogen_dir,
+    "12_heatmap_top20_metabolites_vs_pathogen_groups_rho.png"
+  ),
+  width = 2100,
+  height = 2400,
+  res = 300
+)
+
+pheatmap(
+  heat_mat,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  color = colorRampPalette(c("#2166AC", "white", "#B2182B"))(100),
+  breaks = seq(-1, 1, length.out = 101),
+  fontsize_row = 8,
+  fontsize_col = 9,
+  main = "Top20 metabolites vs pathogen groups"
+)
+
+dev.off()
+
+# ---------------------------------------------------------
+# 22.12 可视化 3：显著代谢物-病原菌 species 相关热图
+# ---------------------------------------------------------
+
+top_sig_pairs <- top20_metab_pathogen_species_sig %>%
+  arrange(p_value, desc(abs_rho)) %>%
+  slice_head(n = 80)
+
+if (nrow(top_sig_pairs) > 0) {
+  
+  sig_metabs <- unique(top_sig_pairs$metabolite)
+  sig_pathogens <- unique(top_sig_pairs$species)
+  
+  species_heat_df <- top20_metab_pathogen_species_cor %>%
+    filter(
+      metabolite %in% sig_metabs,
+      species %in% sig_pathogens
+    ) %>%
+    mutate(
+      metabolite_label = ifelse(
+        is.na(MS2_name) | MS2_name == "",
+        metabolite,
+        MS2_name
+      ),
+      metabolite_label = str_replace_all(metabolite_label, "−", "-"),
+      metabolite_label = str_replace_all(metabolite_label, "–", "-"),
+      metabolite_label = str_replace_all(metabolite_label, "—", "-"),
+      metabolite_label = str_trunc(metabolite_label, width = 35),
+      pathogen_label = ifelse(
+        is.na(Pathogen_species) | Pathogen_species == "",
+        species,
+        Pathogen_species
+      ),
+      pathogen_label = str_trunc(pathogen_label, width = 35)
+    ) %>%
+    select(metabolite_label, pathogen_label, rho) %>%
+    distinct() %>%
+    pivot_wider(
+      names_from = pathogen_label,
+      values_from = rho,
+      values_fill = 0
+    )
+  
+  species_heat_mat <- species_heat_df %>%
+    column_to_rownames("metabolite_label") %>%
+    as.matrix()
+  
+  pdf(
+    file.path(
+      top20_pathogen_dir,
+      "13_heatmap_sig_top20_metabolites_vs_pathogen_species_rho.pdf"
+    ),
+    width = 12,
+    height = 8,
+    useDingbats = FALSE
+  )
+  
+  pheatmap(
+    species_heat_mat,
+    cluster_rows = TRUE,
+    cluster_cols = TRUE,
+    color = colorRampPalette(c("#2166AC", "white", "#B2182B"))(100),
+    breaks = seq(-1, 1, length.out = 101),
+    fontsize_row = 8,
+    fontsize_col = 7,
+    main = "Significant correlations: top20 metabolites vs pathogenic species"
+  )
+  
+  dev.off()
+  
+  png(
+    file.path(
+      top20_pathogen_dir,
+      "13_heatmap_sig_top20_metabolites_vs_pathogen_species_rho.png"
+    ),
+    width = 3600,
+    height = 2400,
+    res = 300
+  )
+  
+  pheatmap(
+    species_heat_mat,
+    cluster_rows = TRUE,
+    cluster_cols = TRUE,
+    color = colorRampPalette(c("#2166AC", "white", "#B2182B"))(100),
+    breaks = seq(-1, 1, length.out = 101),
+    fontsize_row = 8,
+    fontsize_col = 7,
+    main = "Significant correlations: top20 metabolites vs pathogenic species"
+  )
+  
+  dev.off()
+  
+} else {
+  
+  cat("没有满足 p < 0.05 且 |rho| >= 0.5 的 top20 代谢物-病原菌 species 相关关系。\n")
+}
+
+# ---------------------------------------------------------
+# 22.13 总结：整体方向
+# ---------------------------------------------------------
+
+top20_pathogen_direction_summary <- top20_metab_all_pathogen_cor %>%
+  summarise(
+    n_top20_metabolites = n(),
+    n_negative = sum(rho_all_pathogen < 0, na.rm = TRUE),
+    n_positive = sum(rho_all_pathogen > 0, na.rm = TRUE),
+    n_sig_negative = sum(
+      rho_all_pathogen < 0 &
+        p_all_pathogen < 0.05,
+      na.rm = TRUE
+    ),
+    n_sig_positive = sum(
+      rho_all_pathogen > 0 &
+        p_all_pathogen < 0.05,
+      na.rm = TRUE
+    ),
+    mean_rho = mean(rho_all_pathogen, na.rm = TRUE),
+    median_rho = median(rho_all_pathogen, na.rm = TRUE)
+  ) %>%
+  mutate(
+    negative_prop = n_negative / n_top20_metabolites,
+    positive_prop = n_positive / n_top20_metabolites,
+    overall_direction = case_when(
+      n_negative > n_positive ~ "Overall negative",
+      n_positive > n_negative ~ "Overall positive",
+      TRUE ~ "Mixed or balanced"
+    )
+  )
+
+write_csv(
+  top20_pathogen_direction_summary,
+  file.path(
+    top20_pathogen_dir,
+    "14_top20_metabolites_overall_direction_summary_vs_pathogens.csv"
+  )
+)
+
+cat("丰度前20代谢物与整体病原菌相关方向总结：\n")
+print(top20_pathogen_direction_summary)
+
+
+############################################################
+## Metabolites vs pathogens overall analysis
+## 代谢物丰度矩阵 vs 病原菌丰度矩阵整体分析
+############################################################
+
+library(tidyverse)
+library(vegan)
+library(ggrepel)
+library(patchwork)
+
+set.seed(123)
+
+############################################################
+## 0. 路径设置
+############################################################
+
+# 如果你在 cssdR2 项目根目录下运行，直接使用 input/output 即可
+input  <- "input"
+output <- "output/metabolite_pathogen_overall"
+
+dir.create(output, recursive = TRUE, showWarnings = FALSE)
+
+metabolism_file <- file.path(input, "metabolism.csv")
+sample_file     <- file.path(input, "sample.csv")
+pathogenic_file <- file.path(input, "pathogenic.csv")
+
+# microeco 细菌数据集位置，代码会自动寻找
+dataset_bac_candidates <- c(
+  file.path(input,  "microeco_dataset_bacteria_type1.rds"),
+  file.path(output, "microeco_dataset_bacteria_type1.rds"),
+  "output/microeco_dataset_bacteria_type1.rds",
+  "microeco_dataset_bacteria_type1.rds"
+)
+
+dataset_bac_file <- dataset_bac_candidates[file.exists(dataset_bac_candidates)][1]
+
+if (is.na(dataset_bac_file)) {
+  stop("Cannot find microeco_dataset_bacteria_type1.rds. Please check the path.")
+}
+
+############################################################
+## 1. 读取样本信息
+############################################################
+
+sam <- read.csv(sample_file, check.names = FALSE, stringsAsFactors = FALSE)
+
+if (!"sample" %in% colnames(sam)) {
+  stop("sample.csv must contain a column named 'sample'.")
+}
+
+sam <- sam %>%
+  mutate(sample = as.character(sample))
+
+############################################################
+## 2. 读取并整理代谢物丰度矩阵
+## metabolism.csv: 行 = 代谢物，列 = 样本
+############################################################
+
+metab_raw <- read.csv(
+  metabolism_file,
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+# 自动识别样本列
+metab_sample_cols <- intersect(colnames(metab_raw), sam$sample)
+
+if (length(metab_sample_cols) < 3) {
+  stop("Too few matched sample columns between metabolism.csv and sample.csv.")
+}
+
+# 构建代谢物 ID
+if ("MS2_name" %in% colnames(metab_raw)) {
+  metab_id <- metab_raw$MS2_name
+} else {
+  metab_id <- paste0("metabolite_", seq_len(nrow(metab_raw)))
+}
+
+# 如果代谢物名字为空，用 mz_rt 补充
+metab_id <- ifelse(
+  is.na(metab_id) | metab_id == "" | metab_id == "NA",
+  paste0("metab_", seq_len(nrow(metab_raw))),
+  metab_id
+)
+
+# 加上 mz 和 rt，避免重复名
+if (all(c("mz", "rt") %in% colnames(metab_raw))) {
+  metab_id <- paste0(metab_id, "_mz", metab_raw$mz, "_rt", metab_raw$rt)
+}
+
+metab_id <- make.unique(metab_id)
+
+metab_mat <- metab_raw %>%
+  select(all_of(metab_sample_cols)) %>%
+  mutate(across(everything(), as.numeric)) %>%
+  as.data.frame()
+
+rownames(metab_mat) <- metab_id
+
+# 转置为：样本 × 代谢物
+metab_mat <- t(as.matrix(metab_mat))
+
+# 缺失值处理
+metab_mat[is.na(metab_mat)] <- 0
+
+# 去除全 0 代谢物
+metab_mat <- metab_mat[, colSums(metab_mat > 0) > 0, drop = FALSE]
+
+cat("Metabolite matrix:", nrow(metab_mat), "samples ×", ncol(metab_mat), "metabolites\n")
+
+############################################################
+## 3. 从 microeco 数据集中构建病原菌丰度矩阵
+## dataset_bac$otu_table: 物种/OTU × 样本
+## dataset_bac$tax_table: 分类注释
+############################################################
+
+dataset_bac <- readRDS(dataset_bac_file)
+
+otu <- as.data.frame(dataset_bac$otu_table, check.names = FALSE)
+tax <- as.data.frame(dataset_bac$tax_table, check.names = FALSE)
+
+# 判断 otu_table 是否需要转置
+same_row <- sum(rownames(otu) %in% rownames(tax))
+same_col <- sum(colnames(otu) %in% rownames(tax))
+
+if (same_col > same_row) {
+  otu <- as.data.frame(t(otu), check.names = FALSE)
+}
+
+# 保证丰度为数值
+otu[] <- lapply(otu, function(x) as.numeric(as.character(x)))
+
+# 清理分类名称
+clean_tax_name <- function(x) {
+  x <- as.character(x)
+  x <- gsub("^[a-z]__", "", x)
+  x <- gsub("_", " ", x)
+  x <- trimws(x)
+  x[x %in% c("", "NA", "na", "unclassified", "Unclassified", "uncultured")] <- NA
+  x
+}
+
+# 构建 species 名称
+if (!"Species" %in% colnames(tax)) {
+  stop("tax_table must contain a 'Species' column.")
+}
+
+species_raw <- clean_tax_name(tax$Species)
+
+if ("Genus" %in% colnames(tax)) {
+  genus_raw <- clean_tax_name(tax$Genus)
+  
+  species_clean <- ifelse(
+    !is.na(species_raw) & !grepl(" ", species_raw) & !is.na(genus_raw),
+    paste(genus_raw, species_raw),
+    species_raw
+  )
+} else {
+  species_clean <- species_raw
+}
+
+tax$Species_clean <- species_clean
+
+# 读取病原菌列表
+pathogenic <- read.csv(
+  pathogenic_file,
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+if (!"Species" %in% colnames(pathogenic)) {
+  stop("pathogenic.csv must contain a column named 'Species'.")
+}
+
+pathogen_species <- pathogenic$Species %>%
+  clean_tax_name() %>%
+  unique() %>%
+  na.omit()
+
+# 保证 otu 和 tax 对齐
+common_taxa <- intersect(rownames(otu), rownames(tax))
+
+otu2 <- otu[common_taxa, , drop = FALSE]
+tax2 <- tax[common_taxa, , drop = FALSE]
+
+otu2$Species_clean <- tax2$Species_clean
+
+# 聚合到 Species 水平，并筛选病原菌
+pathogen_abun_species <- otu2 %>%
+  filter(!is.na(Species_clean)) %>%
+  filter(Species_clean %in% pathogen_species) %>%
+  group_by(Species_clean) %>%
+  summarise(
+    across(where(is.numeric), sum, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+if (nrow(pathogen_abun_species) == 0) {
+  stop("No pathogen species matched between tax_table and pathogenic.csv. Please check species names.")
+}
+
+pathogen_mat <- pathogen_abun_species %>%
+  column_to_rownames("Species_clean") %>%
+  as.matrix()
+
+# 转置为：样本 × 病原菌
+pathogen_mat <- t(pathogen_mat)
+
+pathogen_mat[is.na(pathogen_mat)] <- 0
+
+# 去除全 0 病原菌
+pathogen_mat <- pathogen_mat[, colSums(pathogen_mat > 0) > 0, drop = FALSE]
+
+cat("Pathogen matrix:", nrow(pathogen_mat), "samples ×", ncol(pathogen_mat), "pathogens\n")
+
+############################################################
+## 4. 对齐代谢物矩阵、病原菌矩阵和样本信息
+############################################################
+
+common_samples <- Reduce(
+  intersect,
+  list(
+    rownames(metab_mat),
+    rownames(pathogen_mat),
+    sam$sample
+  )
+)
+
+if (length(common_samples) < 5) {
+  stop("Too few common samples among metabolites, pathogens and sample metadata.")
+}
+
+metab_mat    <- metab_mat[common_samples, , drop = FALSE]
+pathogen_mat <- pathogen_mat[common_samples, , drop = FALSE]
+
+sam_use <- sam %>%
+  filter(sample %in% common_samples) %>%
+  distinct(sample, .keep_all = TRUE) %>%
+  arrange(match(sample, common_samples))
+
+rownames(sam_use) <- sam_use$sample
+
+cat("Common samples:", length(common_samples), "\n")
+
+############################################################
+## 5. 数据转换
+############################################################
+
+# 代谢物：log10 转换 + 标准化
+metab_log <- log10(metab_mat + 1)
+
+# 去除零方差代谢物
+metab_log <- metab_log[, apply(metab_log, 2, sd, na.rm = TRUE) > 0, drop = FALSE]
+
+metab_scaled <- scale(metab_log)
+metab_scaled[is.na(metab_scaled)] <- 0
+
+# 病原菌：Hellinger 转换，适合群落矩阵
+pathogen_hel <- decostand(pathogen_mat, method = "hellinger")
+
+# 距离矩阵
+metab_dist <- dist(metab_scaled, method = "euclidean")
+pathogen_dist <- vegdist(pathogen_hel, method = "bray")
+
+############################################################
+## 6. Mantel test
+############################################################
+
+mantel_res <- mantel(
+  metab_dist,
+  pathogen_dist,
+  method = "spearman",
+  permutations = 9999
+)
+
+mantel_out <- tibble(
+  analysis = "Mantel test",
+  method = "Spearman",
+  permutations = 9999,
+  mantel_r = unname(mantel_res$statistic),
+  p_value = mantel_res$signif
+)
+
+write.csv(
+  mantel_out,
+  file.path(output, "01_Mantel_metabolite_pathogen.csv"),
+  row.names = FALSE
+)
+
+print(mantel_out)
+
+############################################################
+## 7. Procrustes analysis
+############################################################
+
+metab_pcoa <- cmdscale(metab_dist, k = 2, eig = TRUE, add = TRUE)
+path_pcoa  <- cmdscale(pathogen_dist, k = 2, eig = TRUE, add = TRUE)
+
+metab_scores <- as.data.frame(metab_pcoa$points)
+path_scores  <- as.data.frame(path_pcoa$points)
+
+colnames(metab_scores) <- c("Metab_PCoA1", "Metab_PCoA2")
+colnames(path_scores)  <- c("Pathogen_PCoA1", "Pathogen_PCoA2")
+
+rownames(metab_scores) <- common_samples
+rownames(path_scores)  <- common_samples
+
+proc_fit <- procrustes(
+  X = metab_scores,
+  Y = path_scores,
+  symmetric = TRUE
+)
+
+proc_test <- protest(
+  X = metab_scores,
+  Y = path_scores,
+  permutations = 9999
+)
+
+proc_out <- tibble(
+  analysis = "Procrustes / Protest",
+  permutations = 9999,
+  procrustes_sum_of_squares = proc_fit$ss,
+  protest_correlation = proc_test$t0,
+  p_value = proc_test$signif
+)
+
+write.csv(
+  proc_out,
+  file.path(output, "02_Procrustes_metabolite_pathogen.csv"),
+  row.names = FALSE
+)
+
+print(proc_out)
+
+# 整理 Procrustes 画图数据
+proc_x <- as.data.frame(proc_fit$X)
+proc_y <- as.data.frame(proc_fit$Yrot)
+
+colnames(proc_x) <- c("x1", "y1")
+colnames(proc_y) <- c("x2", "y2")
+
+proc_df <- bind_cols(
+  tibble(sample = rownames(proc_x)),
+  proc_x,
+  proc_y
+) %>%
+  left_join(sam_use, by = "sample")
+
+p_proc <- ggplot(proc_df) +
+  geom_segment(
+    aes(x = x1, y = y1, xend = x2, yend = y2),
+    arrow = arrow(length = unit(0.18, "cm")),
+    linewidth = 0.45,
+    alpha = 0.75
+  ) +
+  geom_point(
+    aes(x = x1, y = y1),
+    size = 3,
+    shape = 21,
+    fill = "white",
+    color = "black"
+  ) +
+  geom_point(
+    aes(x = x2, y = y2, color = ktype),
+    size = 3
+  ) +
+  ggrepel::geom_text_repel(
+    aes(x = x2, y = y2, label = sample),
+    size = 3,
+    max.overlaps = 100
+  ) +
+  theme_bw(base_size = 13) +
+  labs(
+    title = "Procrustes analysis: metabolites vs pathogens",
+    subtitle = paste0(
+      "Protest r = ", round(proc_test$t0, 3),
+      ", p = ", signif(proc_test$signif, 3)
+    ),
+    x = "Axis 1",
+    y = "Axis 2",
+    color = "ktype"
+  )
+
+ggsave(
+  file.path(output, "02_Procrustes_metabolite_pathogen.pdf"),
+  p_proc,
+  width = 7,
+  height = 6
+)
+
+############################################################
+## 8. PCoA 可视化
+############################################################
+
+get_pcoa_df <- function(pcoa_obj, prefix, meta_df) {
+  eig <- pcoa_obj$eig
+  pos_eig <- eig[eig > 0]
+  
+  var1 <- round(100 * eig[1] / sum(pos_eig), 2)
+  var2 <- round(100 * eig[2] / sum(pos_eig), 2)
+  
+  df <- as.data.frame(pcoa_obj$points)
+  colnames(df) <- c("Axis1", "Axis2")
+  
+  df <- df %>%
+    rownames_to_column("sample") %>%
+    left_join(meta_df, by = "sample")
+  
+  attr(df, "var1") <- var1
+  attr(df, "var2") <- var2
+  
+  df
+}
+
+metab_pcoa_df <- get_pcoa_df(metab_pcoa, "Metabolite", sam_use)
+path_pcoa_df  <- get_pcoa_df(path_pcoa,  "Pathogen",   sam_use)
+
+p_metab <- ggplot(metab_pcoa_df, aes(Axis1, Axis2)) +
+  geom_point(aes(color = ktype), size = 3) +
+  ggrepel::geom_text_repel(
+    aes(label = sample),
+    size = 3,
+    max.overlaps = 100
+  ) +
+  theme_bw(base_size = 13) +
+  labs(
+    title = "Metabolite profile",
+    x = paste0("PCoA1 (", attr(metab_pcoa_df, "var1"), "%)"),
+    y = paste0("PCoA2 (", attr(metab_pcoa_df, "var2"), "%)"),
+    color = "ktype"
+  )
+
+p_path <- ggplot(path_pcoa_df, aes(Axis1, Axis2)) +
+  geom_point(aes(color = ktype), size = 3) +
+  ggrepel::geom_text_repel(
+    aes(label = sample),
+    size = 3,
+    max.overlaps = 100
+  ) +
+  theme_bw(base_size = 13) +
+  labs(
+    title = "Pathogen profile",
+    x = paste0("PCoA1 (", attr(path_pcoa_df, "var1"), "%)"),
+    y = paste0("PCoA2 (", attr(path_pcoa_df, "var2"), "%)"),
+    color = "ktype"
+  )
+
+p_pcoa <- p_metab + p_path
+
+ggsave(
+  file.path(output, "03_PCoA_metabolite_and_pathogen.pdf"),
+  p_pcoa,
+  width = 12,
+  height = 5.5
+)
+
+############################################################
+## 9. dbRDA：用代谢物主成分解释病原菌群落
+## 避免代谢物数量远大于样本数，先对代谢物做 PCA
+############################################################
+
+metab_pca <- prcomp(
+  metab_scaled,
+  center = FALSE,
+  scale. = FALSE
+)
+
+pca_var <- metab_pca$sdev^2 / sum(metab_pca$sdev^2)
+
+# 选择解释累计方差 >= 80% 的 PC，但最多不超过 5 个
+n_pc_80 <- which(cumsum(pca_var) >= 0.80)[1]
+
+if (is.na(n_pc_80)) {
+  n_pc_80 <- min(3, ncol(metab_pca$x))
+}
+
+n_pc <- min(
+  n_pc_80,
+  5,
+  floor((nrow(metab_scaled) - 1) / 2)
+)
+
+if (n_pc < 1) {
+  n_pc <- 1
+}
+
+pc_names <- paste0("Metab_PC", seq_len(n_pc))
+
+metab_pc_df <- as.data.frame(metab_pca$x[, seq_len(n_pc), drop = FALSE])
+colnames(metab_pc_df) <- pc_names
+metab_pc_df$sample <- rownames(metab_scaled)
+
+metab_pc_df <- metab_pc_df %>%
+  left_join(sam_use, by = "sample")
+
+write.csv(
+  tibble(
+    PC = paste0("Metab_PC", seq_along(pca_var)),
+    variance_explained = pca_var,
+    cumulative_variance = cumsum(pca_var)
+  ),
+  file.path(output, "04_Metabolite_PCA_variance.csv"),
+  row.names = FALSE
+)
+
+# dbRDA / CAP
+formula_dbrda <- as.formula(
+  paste("pathogen_hel ~", paste(pc_names, collapse = " + "))
+)
+
+dbrda_fit <- capscale(
+  formula_dbrda,
+  data = metab_pc_df,
+  distance = "bray",
+  add = TRUE
+)
+
+dbrda_overall <- anova.cca(
+  dbrda_fit,
+  permutations = 9999
+)
+
+dbrda_terms <- anova.cca(
+  dbrda_fit,
+  by = "term",
+  permutations = 9999
+)
+
+dbrda_axis <- anova.cca(
+  dbrda_fit,
+  by = "axis",
+  permutations = 9999
+)
+
+dbrda_r2 <- RsquareAdj(dbrda_fit)
+
+dbrda_overall_out <- tibble(
+  analysis = "dbRDA / capscale",
+  response = "Pathogen community",
+  explanatory_variables = paste(pc_names, collapse = " + "),
+  n_metabolite_PCs = n_pc,
+  raw_R2 = dbrda_r2$r.squared,
+  adjusted_R2 = dbrda_r2$adj.r.squared,
+  F_value = dbrda_overall$F[1],
+  p_value = dbrda_overall$`Pr(>F)`[1]
+)
+
+write.csv(
+  dbrda_overall_out,
+  file.path(output, "05_dbRDA_overall_result.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  as.data.frame(dbrda_terms) %>%
+    rownames_to_column("term"),
+  file.path(output, "06_dbRDA_terms_result.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  as.data.frame(dbrda_axis) %>%
+    rownames_to_column("axis"),
+  file.path(output, "07_dbRDA_axis_result.csv"),
+  row.names = FALSE
+)
+
+print(dbrda_overall_out)
+
+############################################################
+## 10. dbRDA 作图
+############################################################
+
+site_scores <- as.data.frame(scores(dbrda_fit, display = "sites", choices = 1:2))
+site_scores$sample <- rownames(site_scores)
+
+site_scores <- site_scores %>%
+  left_join(sam_use, by = "sample")
+
+bp_scores <- as.data.frame(scores(dbrda_fit, display = "bp", choices = 1:2))
+
+if (nrow(bp_scores) > 0) {
+  bp_scores$variable <- rownames(bp_scores)
+}
+
+# 轴解释度
+eig_dbrda <- dbrda_fit$CCA$eig
+axis1_var <- round(100 * eig_dbrda[1] / sum(eig_dbrda), 2)
+axis2_var <- ifelse(length(eig_dbrda) >= 2, round(100 * eig_dbrda[2] / sum(eig_dbrda), 2), 0)
+
+p_dbrda <- ggplot(site_scores, aes(CAP1, CAP2)) +
+  geom_point(aes(color = ktype), size = 3) +
+  ggrepel::geom_text_repel(
+    aes(label = sample),
+    size = 3,
+    max.overlaps = 100
+  ) +
+  theme_bw(base_size = 13) +
+  labs(
+    title = "dbRDA: pathogen community explained by metabolite PCs",
+    subtitle = paste0(
+      "Adj. R² = ", round(dbrda_r2$adj.r.squared, 3),
+      ", p = ", signif(dbrda_overall$`Pr(>F)`[1], 3)
+    ),
+    x = paste0("CAP1 (", axis1_var, "%)"),
+    y = paste0("CAP2 (", axis2_var, "%)"),
+    color = "ktype"
+  )
+
+if (nrow(bp_scores) > 0) {
+  p_dbrda <- p_dbrda +
+    geom_segment(
+      data = bp_scores,
+      aes(x = 0, y = 0, xend = CAP1, yend = CAP2),
+      arrow = arrow(length = unit(0.22, "cm")),
+      inherit.aes = FALSE,
+      linewidth = 0.55
+    ) +
+    ggrepel::geom_text_repel(
+      data = bp_scores,
+      aes(x = CAP1, y = CAP2, label = variable),
+      inherit.aes = FALSE,
+      size = 3.5
+    )
+}
+
+ggsave(
+  file.path(output, "08_dbRDA_pathogen_explained_by_metabolite_PCs.pdf"),
+  p_dbrda,
+  width = 7,
+  height = 6
+)
+
+############################################################
+## 11. 保存最终矩阵，方便后续分析
+############################################################
+
+write.csv(
+  metab_mat,
+  file.path(output, "09_metabolite_matrix_used_raw.csv")
+)
+
+write.csv(
+  pathogen_mat,
+  file.path(output, "10_pathogen_matrix_used_raw.csv")
+)
+
+write.csv(
+  sam_use,
+  file.path(output, "11_sample_metadata_used.csv"),
+  row.names = FALSE
+)
+
+saveRDS(
+  list(
+    sample_info = sam_use,
+    metabolite_matrix_raw = metab_mat,
+    pathogen_matrix_raw = pathogen_mat,
+    metabolite_scaled = metab_scaled,
+    pathogen_hellinger = pathogen_hel,
+    metabolite_distance = metab_dist,
+    pathogen_distance = pathogen_dist,
+    mantel = mantel_res,
+    procrustes_fit = proc_fit,
+    protest = proc_test,
+    dbrda = dbrda_fit
+  ),
+  file.path(output, "12_metabolite_pathogen_overall_analysis.rds")
+)
+
+cat("\nFinished!\n")
+cat("Results saved to:", output, "\n")
+
+############################################################
+## Optimized overall analysis:
+## Metabolite matrix vs pathogen matrix
+############################################################
+
+library(tidyverse)
+library(vegan)
+library(ggrepel)
+library(patchwork)
+
+set.seed(123)
+
+############################################################
+## 0. 路径
+############################################################
+
+input <- "input"
+
+prev_output <- "output/metabolite_pathogen_overall"
+output <- "output/metabolite_pathogen_overall_optimized"
+
+dir.create(output, recursive = TRUE, showWarnings = FALSE)
+
+sample_file <- file.path(input, "sample.csv")
+metabolism_file <- file.path(input, "metabolism.csv")
+
+metab_matrix_file <- file.path(prev_output, "09_metabolite_matrix_used_raw.csv")
+pathogen_matrix_file <- file.path(prev_output, "10_pathogen_matrix_used_raw.csv")
+
+############################################################
+## 1. 读取已有矩阵
+############################################################
+
+sam <- read.csv(sample_file, check.names = FALSE, stringsAsFactors = FALSE)
+
+metab_mat0 <- read.csv(
+  metab_matrix_file,
+  row.names = 1,
+  check.names = FALSE
+) %>%
+  as.matrix()
+
+pathogen_mat0 <- read.csv(
+  pathogen_matrix_file,
+  row.names = 1,
+  check.names = FALSE
+) %>%
+  as.matrix()
+
+metab_mat0[is.na(metab_mat0)] <- 0
+pathogen_mat0[is.na(pathogen_mat0)] <- 0
+
+common_samples <- Reduce(
+  intersect,
+  list(
+    rownames(metab_mat0),
+    rownames(pathogen_mat0),
+    sam$sample
+  )
+)
+
+metab_mat0 <- metab_mat0[common_samples, , drop = FALSE]
+pathogen_mat0 <- pathogen_mat0[common_samples, , drop = FALSE]
+
+sam_use <- sam %>%
+  filter(sample %in% common_samples) %>%
+  distinct(sample, .keep_all = TRUE) %>%
+  arrange(match(sample, common_samples))
+
+rownames(sam_use) <- sam_use$sample
+
+cat("Common samples:", length(common_samples), "\n")
+cat("Raw metabolite matrix:", nrow(metab_mat0), "×", ncol(metab_mat0), "\n")
+cat("Raw pathogen matrix:", nrow(pathogen_mat0), "×", ncol(pathogen_mat0), "\n")
+
+############################################################
+## 2. 重新读取 metabolism.csv，构建代谢物注释表
+############################################################
+
+metab_raw <- read.csv(
+  metabolism_file,
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+metab_sample_cols <- intersect(colnames(metab_raw), sam$sample)
+
+if ("MS2_name" %in% colnames(metab_raw)) {
+  metab_id <- metab_raw$MS2_name
+} else {
+  metab_id <- paste0("metabolite_", seq_len(nrow(metab_raw)))
+}
+
+metab_id <- ifelse(
+  is.na(metab_id) | metab_id == "" | metab_id == "NA",
+  paste0("metab_", seq_len(nrow(metab_raw))),
+  metab_id
+)
+
+if (all(c("mz", "rt") %in% colnames(metab_raw))) {
+  metab_id <- paste0(metab_id, "_mz", metab_raw$mz, "_rt", metab_raw$rt)
+}
+
+metab_id <- make.unique(metab_id)
+
+metab_annot <- metab_raw %>%
+  mutate(metab_id = metab_id) %>%
+  select(
+    metab_id,
+    any_of(c(
+      "MS2_name",
+      "level",
+      "mz",
+      "rt",
+      "Formula",
+      "Super.Class",
+      "Class",
+      "KEGG COMPOUND ID",
+      "HMDB",
+      "Pubchem ID"
+    ))
+  )
+
+############################################################
+## 3. 工具函数
+############################################################
+
+filter_metabolites <- function(mat,
+                               min_prevalence = 0.30,
+                               top_var = NULL) {
+  
+  mat <- as.matrix(mat)
+  
+  det_rate <- colMeans(mat > 0, na.rm = TRUE)
+  mat <- mat[, det_rate >= min_prevalence, drop = FALSE]
+  
+  if (ncol(mat) == 0) {
+    stop("No metabolites left after prevalence filtering.")
+  }
+  
+  log_mat <- log10(mat + 1)
+  v <- apply(log_mat, 2, var, na.rm = TRUE)
+  mat <- mat[, v > 0, drop = FALSE]
+  v <- v[names(v) %in% colnames(mat)]
+  
+  if (!is.null(top_var) && ncol(mat) > top_var) {
+    keep <- names(sort(v, decreasing = TRUE))[seq_len(top_var)]
+    mat <- mat[, keep, drop = FALSE]
+  }
+  
+  mat
+}
+
+filter_pathogens <- function(mat,
+                             min_presence_n = 2,
+                             top_abundance = NULL) {
+  
+  mat <- as.matrix(mat)
+  
+  prev_n <- colSums(mat > 0, na.rm = TRUE)
+  total_abun <- colSums(mat, na.rm = TRUE)
+  
+  mat <- mat[, prev_n >= min_presence_n & total_abun > 0, drop = FALSE]
+  
+  if (ncol(mat) == 0) {
+    stop("No pathogens left after filtering.")
+  }
+  
+  total_abun <- colSums(mat, na.rm = TRUE)
+  
+  if (!is.null(top_abundance) && ncol(mat) > top_abundance) {
+    keep <- names(sort(total_abun, decreasing = TRUE))[seq_len(top_abundance)]
+    mat <- mat[, keep, drop = FALSE]
+  }
+  
+  mat
+}
+
+aggregate_metabolites_by_class <- function(mat, annot, level_col = "Class") {
+  
+  annot2 <- annot %>%
+    filter(metab_id %in% colnames(mat)) %>%
+    mutate(group = .data[[level_col]]) %>%
+    mutate(
+      group = ifelse(
+        is.na(group) | group == "" | group == "NA" | group == "Unknown",
+        NA,
+        group
+      )
+    ) %>%
+    filter(!is.na(group))
+  
+  common_metab <- intersect(colnames(mat), annot2$metab_id)
+  
+  mat2 <- mat[, common_metab, drop = FALSE]
+  annot2 <- annot2 %>%
+    filter(metab_id %in% common_metab) %>%
+    arrange(match(metab_id, colnames(mat2)))
+  
+  group_list <- split(seq_len(ncol(mat2)), annot2$group)
+  
+  res <- sapply(group_list, function(idx) {
+    rowSums(mat2[, idx, drop = FALSE], na.rm = TRUE)
+  })
+  
+  res <- as.matrix(res)
+  rownames(res) <- rownames(mat)
+  
+  res[, colSums(res > 0) > 0, drop = FALSE]
+}
+
+run_overall_test <- function(metab_mat,
+                             pathogen_mat,
+                             label,
+                             n_pc_max = 2,
+                             permutations = 9999) {
+  
+  common <- intersect(rownames(metab_mat), rownames(pathogen_mat))
+  
+  metab_mat <- metab_mat[common, , drop = FALSE]
+  pathogen_mat <- pathogen_mat[common, , drop = FALSE]
+  
+  if (nrow(metab_mat) < 6 || ncol(metab_mat) < 2 || ncol(pathogen_mat) < 2) {
+    return(
+      tibble(
+        analysis_label = label,
+        n_sample = nrow(metab_mat),
+        n_metabolite = ncol(metab_mat),
+        n_pathogen = ncol(pathogen_mat),
+        mantel_r = NA_real_,
+        mantel_p = NA_real_,
+        protest_r = NA_real_,
+        protest_p = NA_real_,
+        dbrda_raw_R2 = NA_real_,
+        dbrda_adj_R2 = NA_real_,
+        dbrda_p = NA_real_,
+        note = "Too few samples/features"
+      )
+    )
+  }
+  
+  ## 代谢物：log10 + z-score
+  metab_log <- log10(metab_mat + 1)
+  metab_log <- metab_log[, apply(metab_log, 2, sd, na.rm = TRUE) > 0, drop = FALSE]
+  metab_scaled <- scale(metab_log)
+  metab_scaled[is.na(metab_scaled)] <- 0
+  
+  ## 病原菌：Hellinger
+  pathogen_hel <- decostand(pathogen_mat, method = "hellinger")
+  
+  ## 距离
+  metab_dist <- dist(metab_scaled, method = "euclidean")
+  pathogen_dist <- vegdist(pathogen_hel, method = "bray")
+  
+  ## Mantel
+  mantel_res <- mantel(
+    metab_dist,
+    pathogen_dist,
+    method = "spearman",
+    permutations = permutations
+  )
+  
+  ## Procrustes
+  metab_pcoa <- cmdscale(metab_dist, k = 2, eig = TRUE, add = TRUE)
+  path_pcoa <- cmdscale(pathogen_dist, k = 2, eig = TRUE, add = TRUE)
+  
+  metab_scores <- as.data.frame(metab_pcoa$points)
+  path_scores <- as.data.frame(path_pcoa$points)
+  
+  colnames(metab_scores) <- c("M1", "M2")
+  colnames(path_scores) <- c("P1", "P2")
+  
+  proc_test <- protest(
+    metab_scores,
+    path_scores,
+    permutations = permutations
+  )
+  
+  ## dbRDA：限制 PC 数，默认最多 2 个
+  metab_pca <- prcomp(
+    metab_scaled,
+    center = FALSE,
+    scale. = FALSE
+  )
+  
+  n_pc <- min(
+    n_pc_max,
+    ncol(metab_pca$x),
+    floor((nrow(metab_mat) - 3) / 2)
+  )
+  
+  if (n_pc < 1) n_pc <- 1
+  
+  pc_df <- as.data.frame(metab_pca$x[, seq_len(n_pc), drop = FALSE])
+  colnames(pc_df) <- paste0("Metab_PC", seq_len(n_pc))
+  
+  formula_dbrda <- as.formula(
+    paste("pathogen_hel ~", paste(colnames(pc_df), collapse = " + "))
+  )
+  
+  dbrda_fit <- capscale(
+    formula_dbrda,
+    data = pc_df,
+    distance = "bray",
+    add = TRUE
+  )
+  
+  dbrda_anova <- anova.cca(
+    dbrda_fit,
+    permutations = permutations
+  )
+  
+  dbrda_r2 <- RsquareAdj(dbrda_fit)
+  
+  tibble(
+    analysis_label = label,
+    n_sample = nrow(metab_mat),
+    n_metabolite = ncol(metab_scaled),
+    n_pathogen = ncol(pathogen_mat),
+    n_pc_used = n_pc,
+    mantel_r = unname(mantel_res$statistic),
+    mantel_p = mantel_res$signif,
+    protest_r = proc_test$t0,
+    protest_p = proc_test$signif,
+    dbrda_raw_R2 = dbrda_r2$r.squared,
+    dbrda_adj_R2 = dbrda_r2$adj.r.squared,
+    dbrda_p = dbrda_anova$`Pr(>F)`[1],
+    note = NA_character_
+  )
+}
+
+############################################################
+## 4. 构建不同代谢物矩阵
+############################################################
+
+## 4.1 过滤后的全量代谢物
+metab_all_filtered <- filter_metabolites(
+  metab_mat0,
+  min_prevalence = 0.30,
+  top_var = NULL
+)
+
+## 4.2 方差最高 top50 代谢物
+metab_top50 <- filter_metabolites(
+  metab_mat0,
+  min_prevalence = 0.30,
+  top_var = 50
+)
+
+## 4.3 方差最高 top100 代谢物
+metab_top100 <- filter_metabolites(
+  metab_mat0,
+  min_prevalence = 0.30,
+  top_var = 100
+)
+
+## 4.4 有明确 MS2_name 注释的代谢物
+known_ids <- metab_annot %>%
+  filter(
+    metab_id %in% colnames(metab_mat0),
+    !is.na(MS2_name),
+    MS2_name != "",
+    MS2_name != "NA",
+    !grepl("^Unknown|unknown", MS2_name)
+  ) %>%
+  pull(metab_id)
+
+metab_known <- metab_mat0[, intersect(colnames(metab_mat0), known_ids), drop = FALSE]
+
+if (ncol(metab_known) >= 2) {
+  metab_known <- filter_metabolites(
+    metab_known,
+    min_prevalence = 0.30,
+    top_var = 100
+  )
+}
+
+## 4.5 Class 聚合
+metab_class <- aggregate_metabolites_by_class(
+  metab_mat0,
+  metab_annot,
+  level_col = "Class"
+)
+
+metab_class <- filter_metabolites(
+  metab_class,
+  min_prevalence = 0.30,
+  top_var = NULL
+)
+
+## 4.6 Super.Class 聚合
+metab_superclass <- aggregate_metabolites_by_class(
+  metab_mat0,
+  metab_annot,
+  level_col = "Super.Class"
+)
+
+metab_superclass <- filter_metabolites(
+  metab_superclass,
+  min_prevalence = 0.30,
+  top_var = NULL
+)
+
+metab_sets <- list(
+  all_filtered = metab_all_filtered,
+  top50_variable = metab_top50,
+  top100_variable = metab_top100,
+  known_annotated = metab_known,
+  class_level = metab_class,
+  superclass_level = metab_superclass
+)
+
+metab_sets <- metab_sets[sapply(metab_sets, ncol) >= 2]
+
+############################################################
+## 5. 构建不同病原菌矩阵
+############################################################
+
+pathogen_all_filtered <- filter_pathogens(
+  pathogen_mat0,
+  min_presence_n = 2,
+  top_abundance = NULL
+)
+
+pathogen_top20 <- filter_pathogens(
+  pathogen_mat0,
+  min_presence_n = 2,
+  top_abundance = 20
+)
+
+pathogen_top30 <- filter_pathogens(
+  pathogen_mat0,
+  min_presence_n = 2,
+  top_abundance = 30
+)
+
+pathogen_core <- filter_pathogens(
+  pathogen_mat0,
+  min_presence_n = 3,
+  top_abundance = 30
+)
+
+pathogen_sets <- list(
+  pathogen_all_filtered = pathogen_all_filtered,
+  pathogen_top20 = pathogen_top20,
+  pathogen_top30 = pathogen_top30,
+  pathogen_core_prev3_top30 = pathogen_core
+)
+
+pathogen_sets <- pathogen_sets[sapply(pathogen_sets, ncol) >= 2]
+
+############################################################
+## 6. 批量运行 Mantel / Procrustes / dbRDA
+############################################################
+
+result_list <- list()
+
+idx <- 1
+
+for (m_name in names(metab_sets)) {
+  for (p_name in names(pathogen_sets)) {
+    
+    label <- paste(m_name, p_name, sep = " vs ")
+    
+    cat("Running:", label, "\n")
+    
+    result_list[[idx]] <- run_overall_test(
+      metab_mat = metab_sets[[m_name]],
+      pathogen_mat = pathogen_sets[[p_name]],
+      label = label,
+      n_pc_max = 2,
+      permutations = 9999
+    )
+    
+    idx <- idx + 1
+  }
+}
+
+overall_compare <- bind_rows(result_list) %>%
+  mutate(
+    mantel_p_adj = p.adjust(mantel_p, method = "BH"),
+    protest_p_adj = p.adjust(protest_p, method = "BH"),
+    dbrda_p_adj = p.adjust(dbrda_p, method = "BH")
+  ) %>%
+  arrange(mantel_p, protest_p, dbrda_p)
+
+write.csv(
+  overall_compare,
+  file.path(output, "01_optimized_overall_comparison.csv"),
+  row.names = FALSE
+)
+
+print(overall_compare)
+
+############################################################
+## 7. 单独测试代谢物 Class 与病原菌群落的 Mantel
+## 目标：找哪些代谢物类别和病原菌结构最相关
+############################################################
+
+run_class_mantel <- function(mat0,
+                             annot,
+                             pathogen_mat,
+                             level_col = "Class",
+                             min_metab_n = 3,
+                             min_prevalence = 0.30,
+                             permutations = 9999) {
+  
+  annot2 <- annot %>%
+    filter(metab_id %in% colnames(mat0)) %>%
+    mutate(group = .data[[level_col]]) %>%
+    mutate(
+      group = ifelse(
+        is.na(group) | group == "" | group == "NA" | group == "Unknown",
+        NA,
+        group
+      )
+    ) %>%
+    filter(!is.na(group))
+  
+  group_names <- sort(unique(annot2$group))
+  
+  out <- map_dfr(group_names, function(g) {
+    
+    ids <- annot2 %>%
+      filter(group == g) %>%
+      pull(metab_id) %>%
+      intersect(colnames(mat0))
+    
+    if (length(ids) < min_metab_n) {
+      return(NULL)
+    }
+    
+    m <- mat0[, ids, drop = FALSE]
+    
+    det <- colMeans(m > 0, na.rm = TRUE)
+    m <- m[, det >= min_prevalence, drop = FALSE]
+    
+    if (ncol(m) < 2) {
+      return(NULL)
+    }
+    
+    common <- intersect(rownames(m), rownames(pathogen_mat))
+    
+    m <- m[common, , drop = FALSE]
+    p <- pathogen_mat[common, , drop = FALSE]
+    
+    m_log <- log10(m + 1)
+    m_log <- m_log[, apply(m_log, 2, sd, na.rm = TRUE) > 0, drop = FALSE]
+    
+    if (ncol(m_log) < 2) {
+      return(NULL)
+    }
+    
+    m_scaled <- scale(m_log)
+    m_scaled[is.na(m_scaled)] <- 0
+    
+    p_hel <- decostand(p, method = "hellinger")
+    
+    m_dist <- dist(m_scaled, method = "euclidean")
+    p_dist <- vegdist(p_hel, method = "bray")
+    
+    mt <- mantel(
+      m_dist,
+      p_dist,
+      method = "spearman",
+      permutations = permutations
+    )
+    
+    tibble(
+      level = level_col,
+      metabolite_group = g,
+      n_metabolite = ncol(m_scaled),
+      n_sample = nrow(m_scaled),
+      mantel_r = unname(mt$statistic),
+      p_value = mt$signif
+    )
+  })
+  
+  out %>%
+    mutate(p_adj_BH = p.adjust(p_value, method = "BH")) %>%
+    arrange(p_value)
+}
+
+class_mantel <- run_class_mantel(
+  mat0 = metab_mat0,
+  annot = metab_annot,
+  pathogen_mat = pathogen_all_filtered,
+  level_col = "Class",
+  min_metab_n = 3,
+  min_prevalence = 0.30
+)
+
+superclass_mantel <- run_class_mantel(
+  mat0 = metab_mat0,
+  annot = metab_annot,
+  pathogen_mat = pathogen_all_filtered,
+  level_col = "Super.Class",
+  min_metab_n = 3,
+  min_prevalence = 0.30
+)
+
+write.csv(
+  class_mantel,
+  file.path(output, "02_class_level_mantel_with_pathogen.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  superclass_mantel,
+  file.path(output, "03_superclass_level_mantel_with_pathogen.csv"),
+  row.names = FALSE
+)
+
+############################################################
+## 8. 对最优组合重新画 Procrustes 和 PCoA
+############################################################
+
+best_label <- overall_compare %>%
+  filter(!is.na(mantel_p)) %>%
+  arrange(mantel_p) %>%
+  slice(1) %>%
+  pull(analysis_label)
+
+cat("Best label based on Mantel p:", best_label, "\n")
+
+best_m_name <- strsplit(best_label, " vs ")[[1]][1]
+best_p_name <- strsplit(best_label, " vs ")[[1]][2]
+
+best_metab <- metab_sets[[best_m_name]]
+best_path <- pathogen_sets[[best_p_name]]
+
+common <- intersect(rownames(best_metab), rownames(best_path))
+
+best_metab <- best_metab[common, , drop = FALSE]
+best_path <- best_path[common, , drop = FALSE]
+
+metab_log <- log10(best_metab + 1)
+metab_log <- metab_log[, apply(metab_log, 2, sd, na.rm = TRUE) > 0, drop = FALSE]
+metab_scaled <- scale(metab_log)
+metab_scaled[is.na(metab_scaled)] <- 0
+
+path_hel <- decostand(best_path, method = "hellinger")
+
+metab_dist <- dist(metab_scaled, method = "euclidean")
+path_dist <- vegdist(path_hel, method = "bray")
+
+mantel_best <- mantel(
+  metab_dist,
+  path_dist,
+  method = "spearman",
+  permutations = 9999
+)
+
+metab_pcoa <- cmdscale(metab_dist, k = 2, eig = TRUE, add = TRUE)
+path_pcoa <- cmdscale(path_dist, k = 2, eig = TRUE, add = TRUE)
+
+metab_scores <- as.data.frame(metab_pcoa$points)
+path_scores <- as.data.frame(path_pcoa$points)
+
+colnames(metab_scores) <- c("M1", "M2")
+colnames(path_scores) <- c("P1", "P2")
+
+proc_fit <- procrustes(
+  X = metab_scores,
+  Y = path_scores,
+  symmetric = TRUE
+)
+
+proc_test <- protest(
+  X = metab_scores,
+  Y = path_scores,
+  permutations = 9999
+)
+
+proc_df <- bind_cols(
+  tibble(sample = rownames(proc_fit$X)),
+  as.data.frame(proc_fit$X) %>% setNames(c("x1", "y1")),
+  as.data.frame(proc_fit$Yrot) %>% setNames(c("x2", "y2"))
+) %>%
+  left_join(sam_use, by = "sample")
+
+p_proc <- ggplot(proc_df) +
+  geom_segment(
+    aes(x = x1, y = y1, xend = x2, yend = y2),
+    arrow = arrow(length = unit(0.18, "cm")),
+    linewidth = 0.45,
+    alpha = 0.75
+  ) +
+  geom_point(
+    aes(x = x1, y = y1),
+    shape = 21,
+    fill = "white",
+    color = "black",
+    size = 3
+  ) +
+  geom_point(
+    aes(x = x2, y = y2, color = ktype),
+    size = 3
+  ) +
+  ggrepel::geom_text_repel(
+    aes(x = x2, y = y2, label = sample),
+    size = 3,
+    max.overlaps = 100
+  ) +
+  theme_bw(base_size = 13) +
+  labs(
+    title = paste0("Optimized Procrustes: ", best_label),
+    subtitle = paste0(
+      "Protest r = ", round(proc_test$t0, 3),
+      ", p = ", signif(proc_test$signif, 3),
+      "; Mantel r = ", round(unname(mantel_best$statistic), 3),
+      ", p = ", signif(mantel_best$signif, 3)
+    ),
+    x = "Axis 1",
+    y = "Axis 2",
+    color = "ktype"
+  )
+
+ggsave(
+  file.path(output, "04_best_optimized_Procrustes.pdf"),
+  p_proc,
+  width = 7,
+  height = 6
+)
+
+############################################################
+## 9. 保存对象
+############################################################
+
+saveRDS(
+  list(
+    sample_info = sam_use,
+    metab_sets = metab_sets,
+    pathogen_sets = pathogen_sets,
+    overall_compare = overall_compare,
+    class_mantel = class_mantel,
+    superclass_mantel = superclass_mantel,
+    best_label = best_label
+  ),
+  file.path(output, "05_optimized_overall_analysis.rds")
+)
+
+cat("\nFinished optimized overall analysis.\n")
+cat("Results saved to:", output, "\n")
+
+
+############################################################
+## Leave-one-out sensitivity analysis
+## 检验 known_annotated vs pathogen_all_filtered 是否由单个样本驱动
+############################################################
+
+library(tidyverse)
+library(vegan)
+
+set.seed(123)
+
+output <- "output/metabolite_pathogen_overall_optimized"
+
+opt_rds <- readRDS(
+  file.path(output, "05_optimized_overall_analysis.rds")
+)
+
+metab_mat <- opt_rds$metab_sets$known_annotated
+path_mat  <- opt_rds$pathogen_sets$pathogen_all_filtered
+sam_use   <- opt_rds$sample_info
+
+common_samples <- intersect(rownames(metab_mat), rownames(path_mat))
+
+metab_mat <- metab_mat[common_samples, , drop = FALSE]
+path_mat  <- path_mat[common_samples, , drop = FALSE]
+
+run_mantel_protest <- function(metab_mat, path_mat, permutations = 9999) {
+  
+  metab_log <- log10(metab_mat + 1)
+  metab_log <- metab_log[, apply(metab_log, 2, sd, na.rm = TRUE) > 0, drop = FALSE]
+  
+  metab_scaled <- scale(metab_log)
+  metab_scaled[is.na(metab_scaled)] <- 0
+  
+  path_hel <- decostand(path_mat, method = "hellinger")
+  
+  metab_dist <- dist(metab_scaled, method = "euclidean")
+  path_dist  <- vegdist(path_hel, method = "bray")
+  
+  mt <- mantel(
+    metab_dist,
+    path_dist,
+    method = "spearman",
+    permutations = permutations
+  )
+  
+  metab_pcoa <- cmdscale(metab_dist, k = 2, eig = TRUE, add = TRUE)
+  path_pcoa  <- cmdscale(path_dist,  k = 2, eig = TRUE, add = TRUE)
+  
+  proc <- protest(
+    as.data.frame(metab_pcoa$points),
+    as.data.frame(path_pcoa$points),
+    permutations = permutations
+  )
+  
+  tibble(
+    n_sample = nrow(metab_mat),
+    mantel_r = unname(mt$statistic),
+    mantel_p = mt$signif,
+    protest_r = proc$t0,
+    protest_p = proc$signif
+  )
+}
+
+# 全样本结果
+full_res <- run_mantel_protest(
+  metab_mat,
+  path_mat,
+  permutations = 99999
+) %>%
+  mutate(removed_sample = "None")
+
+# 每次去掉一个样本
+loo_res <- map_dfr(common_samples, function(s) {
+  
+  keep_samples <- setdiff(common_samples, s)
+  
+  run_mantel_protest(
+    metab_mat[keep_samples, , drop = FALSE],
+    path_mat[keep_samples, , drop = FALSE],
+    permutations = 9999
+  ) %>%
+    mutate(removed_sample = s)
+})
+
+loo_out <- bind_rows(full_res, loo_res) %>%
+  select(
+    removed_sample,
+    n_sample,
+    mantel_r,
+    mantel_p,
+    protest_r,
+    protest_p
+  )
+
+write.csv(
+  loo_out,
+  file.path(output, "06_known_annotated_pathogen_all_LOO_sensitivity.csv"),
+  row.names = FALSE
+)
+
+print(loo_out)
+
+# 可视化
+p_loo_mantel <- ggplot(
+  loo_out,
+  aes(x = reorder(removed_sample, mantel_r), y = mantel_r)
+) +
+  geom_col() +
+  geom_hline(yintercept = 0, linetype = 2) +
+  coord_flip() +
+  theme_bw(base_size = 13) +
+  labs(
+    title = "Leave-one-out sensitivity: Mantel r",
+    x = "Removed sample",
+    y = "Mantel r"
+  )
+
+p_loo_protest <- ggplot(
+  loo_out,
+  aes(x = reorder(removed_sample, protest_r), y = protest_r)
+) +
+  geom_col() +
+  geom_hline(yintercept = 0, linetype = 2) +
+  coord_flip() +
+  theme_bw(base_size = 13) +
+  labs(
+    title = "Leave-one-out sensitivity: Procrustes r",
+    x = "Removed sample",
+    y = "Protest r"
+  )
+
+ggsave(
+  file.path(output, "06_LOO_Mantel_r.pdf"),
+  p_loo_mantel,
+  width = 6,
+  height = 5
+)
+
+ggsave(
+  file.path(output, "07_LOO_Protest_r.pdf"),
+  p_loo_protest,
+  width = 6,
+  height = 5
+)
+
+############################################################
+## dbRDA PC number sensitivity
+############################################################
+
+library(tidyverse)
+library(vegan)
+
+set.seed(123)
+
+output <- "output/metabolite_pathogen_overall_optimized"
+
+opt_rds <- readRDS(
+  file.path(output, "05_optimized_overall_analysis.rds")
+)
+
+metab_mat <- opt_rds$metab_sets$known_annotated
+path_mat  <- opt_rds$pathogen_sets$pathogen_all_filtered
+
+common_samples <- intersect(rownames(metab_mat), rownames(path_mat))
+
+metab_mat <- metab_mat[common_samples, , drop = FALSE]
+path_mat  <- path_mat[common_samples, , drop = FALSE]
+
+metab_log <- log10(metab_mat + 1)
+metab_log <- metab_log[, apply(metab_log, 2, sd, na.rm = TRUE) > 0, drop = FALSE]
+
+metab_scaled <- scale(metab_log)
+metab_scaled[is.na(metab_scaled)] <- 0
+
+path_hel <- decostand(path_mat, method = "hellinger")
+
+metab_pca <- prcomp(
+  metab_scaled,
+  center = FALSE,
+  scale. = FALSE
+)
+
+pca_var <- metab_pca$sdev^2 / sum(metab_pca$sdev^2)
+
+run_dbrda_npc <- function(n_pc) {
+  
+  pc_df <- as.data.frame(metab_pca$x[, seq_len(n_pc), drop = FALSE])
+  colnames(pc_df) <- paste0("Metab_PC", seq_len(n_pc))
+  
+  fml <- as.formula(
+    paste("path_hel ~", paste(colnames(pc_df), collapse = " + "))
+  )
+  
+  fit <- capscale(
+    fml,
+    data = pc_df,
+    distance = "bray",
+    add = TRUE
+  )
+  
+  anova_overall <- anova.cca(
+    fit,
+    permutations = 99999
+  )
+  
+  r2 <- RsquareAdj(fit)
+  
+  tibble(
+    n_pc = n_pc,
+    metabolite_variance_explained = sum(pca_var[seq_len(n_pc)]),
+    raw_R2 = r2$r.squared,
+    adj_R2 = r2$adj.r.squared,
+    F_value = anova_overall$F[1],
+    p_value = anova_overall$`Pr(>F)`[1]
+  )
+}
+
+dbrda_pc_compare <- map_dfr(1:3, run_dbrda_npc) %>%
+  mutate(p_adj_BH = p.adjust(p_value, method = "BH"))
+
+write.csv(
+  dbrda_pc_compare,
+  file.path(output, "08_dbRDA_PC_number_sensitivity.csv"),
+  row.names = FALSE
+)
+
+print(dbrda_pc_compare)
+
+############################################################
+## Metabolite class × pathogen type analysis
+## 已注释代谢物分类 × 病原菌类型
+############################################################
+
+library(tidyverse)
+library(vegan)
+library(ggplot2)
+library(ggrepel)
+library(pheatmap)
+library(igraph)
+library(ggraph)
+
+set.seed(123)
+
+############################################################
+## 0. 路径设置
+############################################################
+
+input <- "input"
+output <- "output/metabolite_pathogen_class_type"
+
+dir.create(output, recursive = TRUE, showWarnings = FALSE)
+
+opt_file <- "output/metabolite_pathogen_overall_optimized/05_optimized_overall_analysis.rds"
+
+metabolism_file <- file.path(input, "metabolism.csv")
+pathogenic_file <- file.path(input, "pathogenic.csv")
+sample_file     <- file.path(input, "sample.csv")
+
+############################################################
+## 1. 读取 optimized RDS
+############################################################
+
+opt <- readRDS(opt_file)
+
+metab_mat <- opt$metab_sets$known_annotated
+path_mat  <- opt$pathogen_sets$pathogen_all_filtered
+sam_use   <- opt$sample_info
+
+common_samples <- Reduce(
+  intersect,
+  list(
+    rownames(metab_mat),
+    rownames(path_mat),
+    sam_use$sample
+  )
+)
+
+metab_mat <- metab_mat[common_samples, , drop = FALSE]
+path_mat  <- path_mat[common_samples, , drop = FALSE]
+
+sam_use <- sam_use %>%
+  filter(sample %in% common_samples) %>%
+  arrange(match(sample, common_samples))
+
+rownames(sam_use) <- sam_use$sample
+
+cat("Samples:", nrow(metab_mat), "\n")
+cat("Known metabolites:", ncol(metab_mat), "\n")
+cat("Pathogens:", ncol(path_mat), "\n")
+
+############################################################
+## 2. 构建代谢物注释表
+## 注意：这里需要和前面 known_annotated 构建时的 metab_id 完全一致
+############################################################
+
+metab_raw <- read.csv(
+  metabolism_file,
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+if ("MS2_name" %in% colnames(metab_raw)) {
+  metab_id <- metab_raw$MS2_name
+} else {
+  metab_id <- paste0("metabolite_", seq_len(nrow(metab_raw)))
+}
+
+metab_id <- ifelse(
+  is.na(metab_id) | metab_id == "" | metab_id == "NA",
+  paste0("metab_", seq_len(nrow(metab_raw))),
+  metab_id
+)
+
+if (all(c("mz", "rt") %in% colnames(metab_raw))) {
+  metab_id <- paste0(metab_id, "_mz", metab_raw$mz, "_rt", metab_raw$rt)
+}
+
+metab_id <- make.unique(metab_id)
+
+metab_annot <- metab_raw %>%
+  mutate(metab_id = metab_id) %>%
+  select(
+    metab_id,
+    any_of(c(
+      "MS2_name",
+      "level",
+      "mz",
+      "rt",
+      "Formula",
+      "Super.Class",
+      "Class",
+      "KEGG COMPOUND ID",
+      "HMDB",
+      "Pubchem ID"
+    ))
+  ) %>%
+  filter(metab_id %in% colnames(metab_mat)) %>%
+  mutate(
+    Super.Class = ifelse(
+      is.na(Super.Class) | Super.Class == "" | Super.Class == "NA",
+      "Unknown superclass",
+      Super.Class
+    ),
+    Class = ifelse(
+      is.na(Class) | Class == "" | Class == "NA",
+      "Unknown class",
+      Class
+    )
+  )
+
+write.csv(
+  metab_annot,
+  file.path(output, "01_known_metabolite_annotation.csv"),
+  row.names = FALSE
+)
+
+
+############################################################
+## 3. 构建病原菌注释表
+## 直接按照 pathogenic.csv 中的 Host 分类，不再重新判断
+############################################################
+
+clean_tax_name <- function(x) {
+  x <- as.character(x)
+  x <- gsub("^[a-z]__", "", x)
+  x <- gsub("_", " ", x)
+  x <- trimws(x)
+  x[x %in% c("", "NA", "na", "unclassified", "Unclassified", "uncultured")] <- NA
+  x
+}
+
+pathogenic <- read.csv(
+  pathogenic_file,
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+if (!"Species" %in% colnames(pathogenic)) {
+  stop("pathogenic.csv must contain a Species column.")
+}
+
+if (!"Host" %in% colnames(pathogenic)) {
+  stop("pathogenic.csv must contain a Host column.")
+}
+
+# 直接使用 Host 作为病原菌分类
+pathogen_annot <- pathogenic %>%
+  mutate(
+    Species_clean = clean_tax_name(Species),
+    Host = as.character(Host),
+    Host = trimws(Host),
+    Host = ifelse(is.na(Host) | Host == "" | Host == "NA", "Unknown", Host)
+  ) %>%
+  filter(!is.na(Species_clean)) %>%
+  group_by(Species_clean) %>%
+  summarise(
+    Host = paste(sort(unique(Host)), collapse = "; "),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    pathogen_type = Host
+  )
+
+# 只保留 path_mat 中出现的病原菌
+pathogen_annot_use <- tibble(Species_clean = colnames(path_mat)) %>%
+  left_join(pathogen_annot, by = "Species_clean") %>%
+  mutate(
+    Host = ifelse(is.na(Host), "Unknown", Host),
+    pathogen_type = ifelse(is.na(pathogen_type), "Unknown", pathogen_type)
+  )
+
+write.csv(
+  pathogen_annot_use,
+  file.path(output, "02_pathogen_annotation_by_Host.csv"),
+  row.names = FALSE
+)
+
+cat("Pathogen Host type counts:\n")
+print(table(pathogen_annot_use$pathogen_type))
+
+############################################################
+## 4. 聚合代谢物矩阵
+## 样本 × 代谢物类别
+############################################################
+
+aggregate_metabolite_group <- function(mat, annot, group_col = "Class") {
+  
+  annot2 <- annot %>%
+    filter(metab_id %in% colnames(mat)) %>%
+    mutate(group = .data[[group_col]]) %>%
+    filter(!is.na(group), group != "")
+  
+  common_metab <- intersect(colnames(mat), annot2$metab_id)
+  
+  mat2 <- mat[, common_metab, drop = FALSE]
+  
+  annot2 <- annot2 %>%
+    filter(metab_id %in% common_metab) %>%
+    arrange(match(metab_id, colnames(mat2)))
+  
+  group_list <- split(seq_len(ncol(mat2)), annot2$group)
+  
+  group_mat <- sapply(group_list, function(idx) {
+    rowSums(mat2[, idx, drop = FALSE], na.rm = TRUE)
+  })
+  
+  group_mat <- as.matrix(group_mat)
+  rownames(group_mat) <- rownames(mat2)
+  
+  group_mat <- group_mat[, colSums(group_mat > 0) > 0, drop = FALSE]
+  
+  group_mat
+}
+
+metab_class_mat <- aggregate_metabolite_group(
+  metab_mat,
+  metab_annot,
+  group_col = "Class"
+)
+
+metab_super_mat <- aggregate_metabolite_group(
+  metab_mat,
+  metab_annot,
+  group_col = "Super.Class"
+)
+
+write.csv(
+  metab_class_mat,
+  file.path(output, "03_metabolite_Class_abundance_matrix.csv")
+)
+
+write.csv(
+  metab_super_mat,
+  file.path(output, "04_metabolite_SuperClass_abundance_matrix.csv")
+)
+
+############################################################
+## 5. 聚合病原菌矩阵
+## 样本 × 病原菌类型
+############################################################
+
+aggregate_pathogen_type <- function(mat, annot) {
+  
+  annot2 <- annot %>%
+    filter(Species_clean %in% colnames(mat)) %>%
+    arrange(match(Species_clean, colnames(mat)))
+  
+  mat2 <- mat[, annot2$Species_clean, drop = FALSE]
+  
+  group_list <- split(seq_len(ncol(mat2)), annot2$pathogen_type)
+  
+  type_mat <- sapply(group_list, function(idx) {
+    rowSums(mat2[, idx, drop = FALSE], na.rm = TRUE)
+  })
+  
+  type_mat <- as.matrix(type_mat)
+  rownames(type_mat) <- rownames(mat2)
+  
+  type_mat <- type_mat[, colSums(type_mat > 0) > 0, drop = FALSE]
+  
+  type_mat
+}
+
+pathogen_type_mat <- aggregate_pathogen_type(
+  path_mat,
+  pathogen_annot_use
+)
+
+write.csv(
+  pathogen_type_mat,
+  file.path(output, "05_pathogen_type_abundance_matrix.csv")
+)
+
+############################################################
+## 6. 代谢物类别 × 病原菌类型 Spearman 相关
+############################################################
+run_group_correlation <- function(metab_group_mat,
+                                  pathogen_group_mat,
+                                  metab_level = "Class",
+                                  method = "spearman") {
+  
+  common <- intersect(
+    rownames(metab_group_mat),
+    rownames(pathogen_group_mat)
+  )
+  
+  m <- metab_group_mat[common, , drop = FALSE]
+  p <- pathogen_group_mat[common, , drop = FALSE]
+  
+  # log 转换，减少极端值影响
+  m_log <- log10(m + 1)
+  p_log <- log10(p + 1)
+  
+  # 确保仍然是 matrix，并保留列名
+  m_log <- as.matrix(m_log)
+  p_log <- as.matrix(p_log)
+  
+  # 去除零方差列，避免 cor.test 报错
+  m_sd <- apply(m_log, 2, sd, na.rm = TRUE)
+  p_sd <- apply(p_log, 2, sd, na.rm = TRUE)
+  
+  m_log <- m_log[, m_sd > 0, drop = FALSE]
+  p_log <- p_log[, p_sd > 0, drop = FALSE]
+  
+  if (ncol(m_log) < 1) {
+    stop("No metabolite groups with non-zero variance.")
+  }
+  
+  if (ncol(p_log) < 1) {
+    stop("No pathogen types with non-zero variance.")
+  }
+  
+  out <- expand.grid(
+    metabolite_group = colnames(m_log),
+    pathogen_type = colnames(p_log),
+    stringsAsFactors = FALSE
+  ) %>%
+    as_tibble() %>%
+    rowwise() %>%
+    mutate(
+      n_sample = length(common),
+      
+      x = list(as.numeric(m_log[, metabolite_group, drop = TRUE])),
+      y = list(as.numeric(p_log[, pathogen_type, drop = TRUE])),
+      
+      rho = suppressWarnings(
+        cor(
+          unlist(x),
+          unlist(y),
+          method = method,
+          use = "pairwise.complete.obs"
+        )
+      ),
+      
+      p_value = suppressWarnings(
+        cor.test(
+          unlist(x),
+          unlist(y),
+          method = method,
+          exact = FALSE
+        )$p.value
+      )
+    ) %>%
+    ungroup() %>%
+    select(
+      metabolite_group,
+      pathogen_type,
+      n_sample,
+      rho,
+      p_value
+    ) %>%
+    mutate(
+      metab_level = metab_level,
+      p_adj_BH = p.adjust(p_value, method = "BH"),
+      signif_label = case_when(
+        p_adj_BH < 0.05 ~ "**",
+        p_adj_BH < 0.10 ~ "*",
+        p_value < 0.05 ~ "+",
+        TRUE ~ ""
+      )
+    ) %>%
+    arrange(p_value)
+  
+  out
+}
+
+cor_class <- run_group_correlation(
+  metab_class_mat,
+  pathogen_type_mat,
+  metab_level = "Class"
+)
+
+cor_super <- run_group_correlation(
+  metab_super_mat,
+  pathogen_type_mat,
+  metab_level = "Super.Class"
+)
+
+write.csv(
+  cor_class,
+  file.path(output, "06_Class_vs_pathogen_Host_Spearman.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  cor_super,
+  file.path(output, "07_SuperClass_vs_pathogen_Host_Spearman.csv"),
+  row.names = FALSE
+)
+
+############################################################
+## 7. 高 / 低代谢物类别样本中病原菌类型富集
+## 每个代谢物类别按中位数分 High / Low
+############################################################
+
+run_high_low_enrichment <- function(metab_group_mat,
+                                    pathogen_group_mat,
+                                    metab_level = "Class") {
+  
+  common <- intersect(
+    rownames(metab_group_mat),
+    rownames(pathogen_group_mat)
+  )
+  
+  m <- metab_group_mat[common, , drop = FALSE]
+  p <- pathogen_group_mat[common, , drop = FALSE]
+  
+  m_log <- as.matrix(log10(m + 1))
+  p_log <- as.matrix(log10(p + 1))
+  
+  # 去除零方差列
+  m_sd <- apply(m_log, 2, sd, na.rm = TRUE)
+  p_sd <- apply(p_log, 2, sd, na.rm = TRUE)
+  
+  m_log <- m_log[, m_sd > 0, drop = FALSE]
+  p_log <- p_log[, p_sd > 0, drop = FALSE]
+  
+  out <- expand.grid(
+    metabolite_group = colnames(m_log),
+    pathogen_type = colnames(p_log),
+    stringsAsFactors = FALSE
+  ) %>%
+    as_tibble() %>%
+    rowwise() %>%
+    mutate(
+      metab_vec = list(as.numeric(m_log[, metabolite_group, drop = TRUE])),
+      pathogen_vec = list(as.numeric(p_log[, pathogen_type, drop = TRUE])),
+      
+      median_metab = median(unlist(metab_vec), na.rm = TRUE),
+      
+      high_index = list(which(unlist(metab_vec) >= median_metab)),
+      low_index  = list(which(unlist(metab_vec) <  median_metab)),
+      
+      n_high = length(unlist(high_index)),
+      n_low  = length(unlist(low_index)),
+      
+      mean_pathogen_high = mean(
+        unlist(pathogen_vec)[unlist(high_index)],
+        na.rm = TRUE
+      ),
+      
+      mean_pathogen_low = mean(
+        unlist(pathogen_vec)[unlist(low_index)],
+        na.rm = TRUE
+      ),
+      
+      log2FC_high_vs_low = mean_pathogen_high - mean_pathogen_low,
+      
+      p_value = suppressWarnings(
+        wilcox.test(
+          unlist(pathogen_vec)[unlist(high_index)],
+          unlist(pathogen_vec)[unlist(low_index)],
+          exact = FALSE
+        )$p.value
+      )
+    ) %>%
+    ungroup() %>%
+    select(
+      metabolite_group,
+      pathogen_type,
+      n_high,
+      n_low,
+      mean_pathogen_high,
+      mean_pathogen_low,
+      log2FC_high_vs_low,
+      p_value
+    ) %>%
+    mutate(
+      metab_level = metab_level,
+      p_adj_BH = p.adjust(p_value, method = "BH"),
+      enrichment_direction = case_when(
+        log2FC_high_vs_low > 0 ~ "Enriched in high-metabolite samples",
+        log2FC_high_vs_low < 0 ~ "Depleted in high-metabolite samples",
+        TRUE ~ "No change"
+      )
+    ) %>%
+    arrange(p_value)
+  
+  out
+}
+
+enrich_class <- run_high_low_enrichment(
+  metab_class_mat,
+  pathogen_type_mat,
+  metab_level = "Class"
+)
+
+enrich_super <- run_high_low_enrichment(
+  metab_super_mat,
+  pathogen_type_mat,
+  metab_level = "Super.Class"
+)
+
+write.csv(
+  enrich_class,
+  file.path(output, "08_Class_high_low_pathogen_Host_enrichment.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  enrich_super,
+  file.path(output, "09_SuperClass_high_low_pathogen_Host_enrichment.csv"),
+  row.names = FALSE
+)
+
+############################################################
+## 8. 相关性热图
+############################################################
+
+plot_corr_heatmap <- function(cor_df,
+                              level_name = "Class",
+                              filename = "heatmap.pdf",
+                              top_n = 30) {
+  
+  # 优先展示至少有一个 p < 0.05 的代谢物类别
+  show_groups <- cor_df %>%
+    group_by(metabolite_group) %>%
+    summarise(
+      min_p = min(p_value, na.rm = TRUE),
+      max_abs_rho = max(abs(rho), na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(min_p, desc(max_abs_rho)) %>%
+    slice_head(n = top_n) %>%
+    pull(metabolite_group)
+  
+  df2 <- cor_df %>%
+    filter(metabolite_group %in% show_groups)
+  
+  rho_mat <- df2 %>%
+    select(metabolite_group, pathogen_type, rho) %>%
+    pivot_wider(
+      names_from = pathogen_type,
+      values_from = rho,
+      values_fill = 0
+    ) %>%
+    column_to_rownames("metabolite_group") %>%
+    as.matrix()
+  
+  sig_mat <- df2 %>%
+    select(metabolite_group, pathogen_type, signif_label) %>%
+    pivot_wider(
+      names_from = pathogen_type,
+      values_from = signif_label,
+      values_fill = ""
+    ) %>%
+    column_to_rownames("metabolite_group") %>%
+    as.matrix()
+  
+  rho_mat <- rho_mat[show_groups, , drop = FALSE]
+  sig_mat <- sig_mat[rownames(rho_mat), colnames(rho_mat), drop = FALSE]
+  
+  pdf(file.path(output, filename), width = 8, height = max(5, 0.25 * nrow(rho_mat) + 2))
+  
+  pheatmap(
+    rho_mat,
+    cluster_rows = TRUE,
+    cluster_cols = TRUE,
+    display_numbers = sig_mat,
+    fontsize_number = 12,
+    color = colorRampPalette(c("#2166ac", "white", "#b2182b"))(100),
+    breaks = seq(-1, 1, length.out = 101),
+    main = paste0(level_name, " vs pathogen type Spearman rho")
+  )
+  
+  dev.off()
+}
+
+plot_corr_heatmap(
+  cor_class,
+  level_name = "Metabolite Class",
+  filename = "10_Class_vs_pathogen_type_correlation_heatmap.pdf",
+  top_n = 30
+)
+
+plot_corr_heatmap(
+  cor_super,
+  level_name = "Metabolite Super.Class",
+  filename = "11_SuperClass_vs_pathogen_type_correlation_heatmap.pdf",
+  top_n = 30
+)
+
+############################################################
+## 9. 气泡图：显著正相关关系
+############################################################
+
+plot_bubble <- function(cor_df,
+                        level_name = "Class",
+                        filename = "bubble.pdf",
+                        p_cut = 0.05,
+                        rho_cut = 0) {
+  
+  df_plot <- cor_df %>%
+    filter(!is.na(rho), !is.na(p_value)) %>%
+    filter(p_value < p_cut, rho > rho_cut) %>%
+    mutate(
+      metabolite_group = fct_reorder(metabolite_group, rho),
+      pathogen_type = factor(pathogen_type)
+    )
+  
+  if (nrow(df_plot) == 0) {
+    message("No significant positive associations for ", level_name)
+    return(NULL)
+  }
+  
+  p <- ggplot(
+    df_plot,
+    aes(
+      x = pathogen_type,
+      y = metabolite_group,
+      size = -log10(p_value),
+      fill = rho
+    )
+  ) +
+    geom_point(shape = 21, color = "black", alpha = 0.9) +
+    scale_fill_gradient2(
+      low = "#2166ac",
+      mid = "white",
+      high = "#b2182b",
+      midpoint = 0,
+      limits = c(-1, 1)
+    ) +
+    theme_bw(base_size = 13) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      panel.grid.minor = element_blank()
+    ) +
+    labs(
+      title = paste0(level_name, " positively associated with pathogen types"),
+      subtitle = paste0("Spearman p < ", p_cut, ", rho > ", rho_cut),
+      x = "Pathogen type",
+      y = level_name,
+      fill = "Spearman rho",
+      size = "-log10(p)"
+    )
+  
+  ggsave(
+    file.path(output, filename),
+    p,
+    width = 8,
+    height = max(5, 0.28 * length(unique(df_plot$metabolite_group)) + 2)
+  )
+}
+
+plot_bubble(
+  cor_class,
+  level_name = "Metabolite Class",
+  filename = "12_Class_positive_pathogen_type_bubble.pdf",
+  p_cut = 0.05,
+  rho_cut = 0
+)
+
+plot_bubble(
+  cor_super,
+  level_name = "Metabolite Super.Class",
+  filename = "13_SuperClass_positive_pathogen_type_bubble.pdf",
+  p_cut = 0.05,
+  rho_cut = 0
+)
+
+############################################################
+## 10. 输出显著正相关结果
+############################################################
+
+sig_class_positive <- cor_class %>%
+  filter(rho > 0, p_value < 0.05) %>%
+  arrange(pathogen_type, desc(rho))
+
+sig_super_positive <- cor_super %>%
+  filter(rho > 0, p_value < 0.05) %>%
+  arrange(pathogen_type, desc(rho))
+
+write.csv(
+  sig_class_positive,
+  file.path(output, "14_significant_positive_Class_pathogen_type_links.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  sig_super_positive,
+  file.path(output, "15_significant_positive_SuperClass_pathogen_type_links.csv"),
+  row.names = FALSE
+)
+
+############################################################
+## 11. 网络图输入表
+############################################################
+
+network_edges <- sig_class_positive %>%
+  transmute(
+    from = metabolite_group,
+    to = pathogen_type,
+    edge_type = "positive Spearman correlation",
+    rho = rho,
+    p_value = p_value,
+    p_adj_BH = p_adj_BH
+  )
+
+metab_nodes <- network_edges %>%
+  distinct(name = from) %>%
+  mutate(node_type = "Metabolite Class")
+
+path_nodes <- network_edges %>%
+  distinct(name = to) %>%
+  mutate(node_type = "Pathogen type")
+
+network_nodes <- bind_rows(metab_nodes, path_nodes)
+
+write.csv(
+  network_edges,
+  file.path(output, "16_network_edges_Class_pathogen_type.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  network_nodes,
+  file.path(output, "17_network_nodes_Class_pathogen_type.csv"),
+  row.names = FALSE
+)
+
+if (nrow(network_edges) > 0) {
+  
+  g <- graph_from_data_frame(
+    d = network_edges,
+    vertices = network_nodes,
+    directed = FALSE
+  )
+  
+  p_net <- ggraph(g, layout = "fr") +
+    geom_edge_link(
+      aes(width = rho),
+      alpha = 0.7
+    ) +
+    geom_node_point(
+      aes(shape = node_type),
+      size = 5
+    ) +
+    geom_node_text(
+      aes(label = name),
+      repel = TRUE,
+      size = 3
+    ) +
+    scale_edge_width(range = c(0.3, 2)) +
+    theme_void() +
+    labs(
+      title = "Metabolite Class - pathogen type association network",
+      edge_width = "Spearman rho",
+      shape = "Node type"
+    )
+  
+  ggsave(
+    file.path(output, "18_Class_pathogen_type_network.pdf"),
+    p_net,
+    width = 8,
+    height = 7
+  )
+}
+
+############################################################
+## 12. 汇总代谢物类别中包含哪些具体代谢物
+############################################################
+
+metab_class_members <- metab_annot %>%
+  filter(metab_id %in% colnames(metab_mat)) %>%
+  group_by(Super.Class, Class) %>%
+  summarise(
+    n_metabolite = n(),
+    metabolites = paste(unique(MS2_name), collapse = "; "),
+    .groups = "drop"
+  ) %>%
+  arrange(Super.Class, Class)
+
+write.csv(
+  metab_class_members,
+  file.path(output, "19_metabolite_members_by_Class.csv"),
+  row.names = FALSE
+)
+
+############################################################
+## 13. 汇总病原菌类型中包含哪些物种
+############################################################
+
+pathogen_type_members <- pathogen_annot_use %>%
+  group_by(pathogen_type) %>%
+  summarise(
+    n_pathogen = n(),
+    pathogens = paste(unique(Species_clean), collapse = "; "),
+    .groups = "drop"
+  ) %>%
+  arrange(pathogen_type)
+
+write.csv(
+  pathogen_type_members,
+  file.path(output, "20_pathogen_members_by_type.csv"),
+  row.names = FALSE
+)
+
+cat("\nFinished metabolite class × pathogen type analysis.\n")
+cat("Results saved to:", output, "\n")
