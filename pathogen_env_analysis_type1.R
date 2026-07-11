@@ -1,4 +1,4 @@
-#!/usr/bin/env Rscript
+﻿#!/usr/bin/env Rscript
 
 # ============================================================
 # Pathogen abundance analysis across environments with focus on
@@ -34,7 +34,7 @@ suppressPackageStartupMessages({
 project_root <- normalizePath(
   Sys.getenv(
     "CSSD_R2_ROOT",
-    unset = "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2"
+    unset = "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2"
   ),
   winslash = "/",
   mustWork = FALSE

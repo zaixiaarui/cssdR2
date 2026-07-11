@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # ARG abundance analysis: ld + lxc + my + hh
 # 目的：整理四套 ARG subtype 丰度数据，合并 ld、lxc、my、hh 数据源，
 #       按数据源分别过滤低检出 subtype，构建 sample 表，
@@ -207,8 +207,8 @@ rm(list = ls())
 # -----------------------------
 # 0. 参数与环境
 # -----------------------------
-input <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input"
-output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output"
+input <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
+output <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output"
 
 set.seed(123)
 
@@ -219,8 +219,6 @@ library(scales)
 library(ggpubr)
 library(rstatix)
 library(RColorBrewer)
-library(mlr)
-
 load("input/othersam5.rda")
 
 nor_cell_sub_raw_my <- read_csv(
@@ -245,8 +243,8 @@ nor_cell_sub_raw_106 <- read_table(
   file.path(input, "sarg/normalized_cell.subtype_106.txt"),
   show_col_types = FALSE
 ) %>%
-  filter(!is.na(subtype))%>%
-  select(-ERR476713)
+  filter(!is.na(subtype)) %>%
+  select(-any_of("ERR476713"))
 
 combined_db <- read_csv(
   file.path(input, "sarg/ARGRANKER_DB.csv"),
@@ -778,10 +776,8 @@ if (nrow(all_mat) >= 3 && ncol(all_mat) >= 2) {
   # Lancet style color
   # -----------------------------
   
-  library(tidyverse)
-  
   if (!requireNamespace("ggsci", quietly = TRUE)) {
-    install.packages("ggsci")
+    stop("Package 'ggsci' is required for the NMDS color palette. Please install it before running this script.")
   }
   library(ggsci)
   
@@ -2426,7 +2422,7 @@ pkgs <- c("tidyverse", "ggtern", "RColorBrewer")
 
 for (pkg in pkgs) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
-    install.packages(pkg)
+    stop("Missing required package: ", pkg, ". Please install it before running this script.")
   }
   library(pkg, character.only = TRUE)
 }
@@ -2848,7 +2844,7 @@ pkgs <- c("tidyverse", "ggtern", "RColorBrewer")
 
 for (pkg in pkgs) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
-    install.packages(pkg)
+    stop("Missing required package: ", pkg, ". Please install it before running this script.")
   }
   library(pkg, character.only = TRUE)
 }
@@ -3399,7 +3395,7 @@ pkgs <- c("tidyverse", "igraph", "tidygraph", "ggraph", "RColorBrewer")
 
 for (pkg in pkgs) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
-    install.packages(pkg)
+    stop("Missing required package: ", pkg, ". Please install it before running this script.")
   }
   library(pkg, character.only = TRUE)
 }
@@ -3663,7 +3659,7 @@ pkgs <- c(
 
 for (pkg in pkgs) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
-    install.packages(pkg)
+    stop("Missing required package: ", pkg, ". Please install it before running this script.")
   }
   library(pkg, character.only = TRUE)
 }
@@ -4000,3 +3996,4 @@ ggsave(
 # ============================================================
 # 完成
 # ============================================================
+

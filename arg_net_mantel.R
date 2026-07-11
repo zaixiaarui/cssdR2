@@ -1,4 +1,4 @@
-rm(list = ls())
+﻿rm(list = ls())
 
 # ============================================================
 # Kraken2 + Bracken to microeco dataset
@@ -8,8 +8,8 @@ rm(list = ls())
 # -----------------------------
 # 0. 参数与环境
 # -----------------------------
-input <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR/input"
-output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR/output"
+input <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
+output <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output"
 outp <- file.path(output, "arg_net_mantel")
 
 dir.create(output, recursive = TRUE, showWarnings = FALSE)

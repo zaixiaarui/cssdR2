@@ -1,4 +1,4 @@
-############################################################
+﻿############################################################
 ## MetaCHIP + GTDB taxonomy + abundance
 ## HGT frequency framework
 ## Author: ChatGPT
@@ -12,13 +12,13 @@ suppressPackageStartupMessages({
 ## 0. 参数区：只改这里
 ############################################################
 
-hgt_file <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input/result/metachip/mc_20260414_112459_combined_pcofg_HGTs_ip90_al200bp_c75_ei80_f10kbp/mc_20260414_112459_pcofg_detected_HGTs.txt"
-tax_file <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input/result/metachip/gtdb_taxonomy.tsv"
+hgt_file <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input/result/metachip/mc_20260414_112459_combined_pcofg_HGTs_ip90_al200bp_c75_ei80_f10kbp/mc_20260414_112459_pcofg_detected_HGTs.txt"
+tax_file <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input/result/metachip/gtdb_taxonomy.tsv"
 
 ## 如果你已经有 MAG 丰度表，就填这里；没有就设为 NA
-abun_file <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input/result/coverm/abundance.tsv"
+abun_file <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input/result/coverm/abundance.tsv"
 
-outdir <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output/result/metachip_hgt_summary"
+outdir <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output/result/metachip_hgt_summary"
 dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
 
 ## 主要分析层级：建议 genus

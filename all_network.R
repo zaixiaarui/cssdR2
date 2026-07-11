@@ -1,10 +1,10 @@
-rm(list = ls())
+﻿rm(list = ls())
 
 # -----------------------------
 # 0. 参数与环境
 # -----------------------------
-input  <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input"
-output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output"
+input  <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
+output <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output"
 
 load("input/othersam5.rda")
 
@@ -52,8 +52,8 @@ rm(list = ls())
 # -----------------------------
 # 0. 参数与环境
 # -----------------------------
-input  <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input"
-output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output"
+input  <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
+output <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output"
 
 output <- file.path(output, "kraken_type1_distribution_network")
 dir.create(output, recursive = TRUE, showWarnings = FALSE)
@@ -1562,7 +1562,7 @@ cat("Output:", output_div, "\n")
 # 比较 Urban wetland / Urban wetland sediment / Urban wetlands rhizosphere
 # ============================================================
 
-output_patho <- file.path("D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output", "pathogen_distribution_type1")
+output_patho <- file.path("D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output", "pathogen_distribution_type1")
 dir.create(output_patho, recursive = TRUE, showWarnings = FALSE)
 
 library(tidyverse)
@@ -3187,7 +3187,7 @@ type1_comparisons <- list(
 # 29.1 绝对丰度 facet 图
 # -----------------------------
 
-#host_abs_test = read_csv("D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output/pathogen_distribution_type1/host_absolute_abundance_for_stat.csv",
+#host_abs_test = read_csv("D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output/pathogen_distribution_type1/host_absolute_abundance_for_stat.csv",
 #                         show_col_types = FALSE)
 
 p_host_abs_diff <- ggplot(
@@ -3482,7 +3482,7 @@ write_csv(
 cat("LEfSe marker 数量：", nrow(lefse_res), "\n")
 print(head(lefse_res))
 print(colnames(lefse_res))
-#lefse_pathogen_type1 <- readRDS("D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output/pathogen_distribution_type1/pathogen_lefse_microeco_type1/trans_diff_lefse_pathogen_type1.rds")
+#lefse_pathogen_type1 <- readRDS("D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output/pathogen_distribution_type1/pathogen_lefse_microeco_type1/trans_diff_lefse_pathogen_type1.rds")
 # ============================================================
 # 33. microeco 官方方式：LDA score barplot
 # ============================================================
@@ -3626,13 +3626,13 @@ ggsave(
 
 library(tidyverse)
 
-output_patho_arg <- file.path("D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output", "pathogen_ARG_host_contig")
+output_patho_arg <- file.path("D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output", "pathogen_ARG_host_contig")
 dir.create(output_patho_arg, recursive = TRUE, showWarnings = FALSE)
 
 # -----------------------------
 # 1.1 提取 microeco LEfSe 结果
 # -----------------------------
-#lefse_pathogen_type1 <- readRDS("D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output/pathogen_distribution_type1/pathogen_lefse_microeco_type1/trans_diff_lefse_pathogen_type1.rds")
+#lefse_pathogen_type1 <- readRDS("D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output/pathogen_distribution_type1/pathogen_lefse_microeco_type1/trans_diff_lefse_pathogen_type1.rds")
 
 lefse_res <- lefse_pathogen_type1$res_diff %>%
   as.data.frame()
@@ -4561,7 +4561,7 @@ rhizosphere_enriched_pathogen_species_ARG_mechanism_heatmap.pdf
 rhizosphere_enriched_pathogen_species_ARG_rank_heatmap.pdf
 
 
-load("D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output/ARG_MGE_VF_host_score_strict/Strict_Integrated_ARG_MGE_VF_host_score_Species.rda")
+load("D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output/ARG_MGE_VF_host_score_strict/Strict_Integrated_ARG_MGE_VF_host_score_Species.rda")
 head(ARG_MGE_VF_host_score)
 
 grep(

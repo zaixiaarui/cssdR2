@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # 用 tmap 绘制全球 ARGs 分布图
 # 背景：本地栅格底图 NE2_HR_LC_SR_W_DR.tif
 # 不叠加国家边界和国际线
@@ -27,9 +27,9 @@ for (pkg in pkgs) {
 # 0. 路径
 # 按你的实际路径修改
 # -----------------------------
-input  <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input"
+input  <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
 # 如果 output 已经提前定义，可以删掉下面这一行
-output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output/map_arg"
+output <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output/map_arg"
 
 dir.create(output, recursive = TRUE, showWarnings = FALSE)
 

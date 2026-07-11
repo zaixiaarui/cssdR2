@@ -1,12 +1,12 @@
-rm(list = ls())
+﻿rm(list = ls())
 
 # -----------------------------
 # 0. 参数与环境
 # -----------------------------
 library(tidyverse)
 
-input <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input"
-output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/vOTU_host_arg_cytoscape"
+input <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
+output <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/vOTU_host_arg_cytoscape"
 
 if (!dir.exists(output)) {
   dir.create(output, recursive = TRUE)
@@ -32,7 +32,7 @@ argranker_db <- read_csv(
 )
 
 vOTU_TAX <- read_tsv(
-  "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output/vOTU_taxonomy_merged.tsv",
+  "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output/vOTU_taxonomy_merged.tsv",
   show_col_types = FALSE
 )
 
@@ -436,7 +436,7 @@ library(tidygraph)
 library(ggraph)
 library(ggrepel)
 
-output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/vOTU_host_arg_cytoscape"
+output <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/vOTU_host_arg_cytoscape"
 
 node <- read_csv(file.path(output, "node_annotated.csv"), show_col_types = FALSE)
 edge <- read_csv(file.path(output, "edge_annotated.csv"), show_col_types = FALSE)

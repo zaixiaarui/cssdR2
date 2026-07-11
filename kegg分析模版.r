@@ -1,8 +1,8 @@
-rm(list = ls())
-input <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR/input"
+﻿rm(list = ls())
+input <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
 
 # 所有结果统一输出到 outp/arg_kmean
-output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR/output"
+output <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output"
 output <- file.path(output, "contig_kegg_kmean")
 if (!dir.exists(output)) dir.create(output, recursive = TRUE)
 

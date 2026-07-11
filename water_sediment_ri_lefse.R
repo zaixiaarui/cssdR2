@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # LEfSe analysis for rhizosphere-enriched microbes
 # Groups:
 #   Urban wetland
@@ -15,8 +15,8 @@ library(ggplot2)
 # -----------------------------
 # 1. 路径设置
 # -----------------------------
-input_dir  <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input"
-output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output"
+input_dir  <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
+output <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output"
 
 output_dir <- "output/result/lefse_rhizosphere_microbes"
 

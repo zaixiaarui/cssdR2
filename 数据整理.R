@@ -1,13 +1,13 @@
-
+﻿
 rm(list = ls())
 
 # -----------------------------
 # 0. 参数与环境
 # -----------------------------
-input <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input"
+input <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
 
 # 所有结果统一输出到 outp/arg_kmean
-output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output"
+output <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output"
 #outp <- file.path(output, "arg_kmean")
 
 set.seed(123)

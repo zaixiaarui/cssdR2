@@ -1,4 +1,4 @@
-# =========================================================
+﻿# =========================================================
 # 16. 所有代谢物 × 所有微生物 Spearman 相关性分析
 # =========================================================
 
@@ -8,7 +8,7 @@ library(data.table)
 # ---------------------------------------------------------
 # 16.0 设置输出目录
 # ---------------------------------------------------------
-input  <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input"
+input  <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
 
 analysis_dir <- file.path(output, "metabolite_microbe_host_score_analysis")
 cor_all_dir <- file.path(analysis_dir, "16_all_metabolites_all_microbes_correlation")
@@ -63,7 +63,7 @@ if (!exists("dataset_bac")) {
 }
 
 load(
-  "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output/ARG_MGE_VF_host_score_strict/Strict_Integrated_ARG_MGE_VF_host_score_Species.rda"
+  "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output/ARG_MGE_VF_host_score_strict/Strict_Integrated_ARG_MGE_VF_host_score_Species.rda"
 )
 
 head(sam)

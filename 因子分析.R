@@ -1,10 +1,10 @@
-rm(list = ls())
+﻿rm(list = ls())
 
 # -----------------------------
 # 0. 参数与环境
 # -----------------------------
-input  <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input"
-output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output"
+input  <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
+output <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output"
 library(tidyverse)
 library(vegan)
 library(pheatmap)

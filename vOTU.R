@@ -1,4 +1,4 @@
-rm(list = ls())
+﻿rm(list = ls())
 
 # ============================================================
 # vOTU taxonomy 合并脚本
@@ -15,8 +15,8 @@ rm(list = ls())
 # -----------------------------
 # 0. 参数与环境
 # -----------------------------
-input  <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR/input"
-output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR/output"
+input  <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
+output <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output"
 
 set.seed(123)
 

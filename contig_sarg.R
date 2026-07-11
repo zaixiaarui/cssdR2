@@ -1,5 +1,5 @@
-input="D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input"
-output="D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output"
+﻿input="D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
+output="D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output"
 set.seed(123)
 library(tidyverse)
 
@@ -1255,7 +1255,7 @@ library(readr)
 # 0. 读取数据
 # ------------------------------------------------------------
 
-load("D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output/contig_taxid_tax_arg.rda")
+load("D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output/contig_taxid_tax_arg.rda")
 
 # 输出目录
 host_out <- file.path(output, "ARG_host_score")
@@ -1612,14 +1612,14 @@ library(ggplot2)
 # 0. 路径和参数
 # ------------------------------------------------------------
 
-load("D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output/contig_taxid_tax_arg.rda")
+load("D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output/contig_taxid_tax_arg.rda")
 
 if (!exists("output")) {
-  output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output"
+  output <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output"
 }
 
 if (!exists("input")) {
-  input <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input"
+  input <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
 }
 
 host_out <- file.path(output, "ARG_MGE_VF_host_score")
@@ -2415,8 +2415,8 @@ library(ggplot2)
 # 0. 路径设置
 # ------------------------------------------------------------
 
-input  <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input"
-output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output"
+input  <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
+output <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output"
 
 host_out <- file.path(output, "ARG_MGE_VF_host_score_strict")
 dir.create(host_out, recursive = TRUE, showWarnings = FALSE)

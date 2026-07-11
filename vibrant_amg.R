@@ -1,11 +1,11 @@
-rm(list = ls())
+﻿rm(list = ls())
 
 # ============================================================
 # 0. 路径
 # ============================================================
 
-input <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR/input"
-output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR/output"
+input <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
+output <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output"
 outp <- file.path(output, "vibrant_amg")
 
 dir.create(outp, recursive = TRUE, showWarnings = FALSE)

@@ -1,11 +1,11 @@
-rm(list = ls())
+﻿rm(list = ls())
 
 # =========================================================
 # 0. 参数与环境
 # =========================================================
 
-input  <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/input"
-output <- "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output"
+input  <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/input"
+output <- "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output"
 
 analysis_dir <- file.path(output, "metabolite_microbe_host_score_analysis")
 dir.create(analysis_dir, recursive = TRUE, showWarnings = FALSE)
@@ -58,7 +58,7 @@ if (!exists("dataset_bac")) {
 }
 
 load(
-  "D:/OneDrive/Thursday/2.文章相关/cssd/cssdR2/output/ARG_MGE_VF_host_score_strict/Strict_Integrated_ARG_MGE_VF_host_score_Species.rda"
+  "D:\\OneDrive\\Thursday\\2.paper\\cssd\\cssdR2/output/ARG_MGE_VF_host_score_strict/Strict_Integrated_ARG_MGE_VF_host_score_Species.rda"
 )
 
 head(sam)
